@@ -1,3 +1,7 @@
+<img width="1536" height="1024" alt="cavr_preview" src="https://github.com/user-attachments/assets/44b8ad20-3a0d-4745-8f04-188ce2d143d8" />
+
+
+
 # CAVR
 
 CAVR: Calibration-Aware Validation and Replay for Vision-Guided Industrial Robotics is planned as a ROS-free C++20 framework for recording, replaying, visualizing, and validating synchronized industrial robot and camera data.
