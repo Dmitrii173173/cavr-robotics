@@ -16,6 +16,23 @@ CAVR: Calibration-Aware Validation and Replay for Vision-Guided Industrial Robot
 This repository currently contains the project scaffold and an early Qt 6 Widgets CAVR Studio shell. Runtime robotics replay, recording, validation, and storage functionality are not implemented yet.
 
 
+
+## Run CSV Replay Demo
+
+```bash
+cmake --preset mac-debug
+cmake --build --preset mac-debug
+./build/mac-debug/apps/cavr-play/cavr-play datasets/demo_csv/session.json
+```
+
+Expected output:
+
+```text
+0.000 s | pose 0 | frame_0000.png
+0.100 s | pose 1 | frame_0001.png
+0.200 s | pose 2 | frame_0002.png
+```
+
 ## Run CAVR Studio UI
 
 ```bash
@@ -37,6 +54,7 @@ The shell also supports a non-GUI smoke check:
 - Conan 2 recipe skeleton.
 - Modular directory layout for core libraries, adapters, command-line apps, tests, datasets, scripts, and documentation.
 - Qt 6 Widgets CAVR Studio shell with dock panels and a 3D viewport.
+- Deterministic CSV pose and image metadata replay demo.
 
 ## Non-Scope
 
@@ -44,7 +62,7 @@ The shell also supports a non-GUI smoke check:
 - No MCAP or Protocol Buffers implementation.
 - No production backend-connected desktop application.
 - No ROS dependency.
-- No executable replay logic yet.
+- No MCAP-backed replay logic yet.
 - CAVR Studio currently provides only a Qt-based UI shell.
 
 ## First Local Configure

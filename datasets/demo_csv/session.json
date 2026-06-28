@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "poses_csv": "poses.csv",
+  "images_dir": "images",
+  "images": [
+    { "timestamp_ns": 0, "path": "frame_0000.png" },
+    { "timestamp_ns": 100000000, "path": "frame_0001.png" },
+    { "timestamp_ns": 200000000, "path": "frame_0002.png" }
+  ]
+}
