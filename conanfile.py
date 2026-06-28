@@ -2,8 +2,8 @@ from conan import ConanFile
 from conan.tools.cmake import CMakeDeps, CMakeToolchain, cmake_layout
 
 
-class TwinReplayConan(ConanFile):
-    name = "twinreplay"
+class CavrConan(ConanFile):
+    name = "cavr"
     version = "0.1.0"
     package_type = "application"
 

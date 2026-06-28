@@ -1,7 +1,7 @@
-add_library(twinreplay_adapter_robodk INTERFACE)
-add_library(TwinReplay::adapter_robodk ALIAS twinreplay_adapter_robodk)
+add_library(cavr_adapter_robodk INTERFACE)
+add_library(CAVR::adapter_robodk ALIAS cavr_adapter_robodk)
 
-target_link_libraries(twinreplay_adapter_robodk
+target_link_libraries(cavr_adapter_robodk
   INTERFACE
-    TwinReplay::adapter_sdk
+    CAVR::adapter_sdk
 )
