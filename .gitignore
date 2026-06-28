@@ -1,0 +1,56 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Project notes and local planning files
+*.md
+!README.md
+goal.png
+
+# CMake and build outputs
+build/
+cmake-build-*/
+out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+Testing/
+
+# Conan
+.conan/
+conanbuild/
+conanrun/
+graph_info.json
+
+# Generated binaries and libraries
+*.a
+*.dylib
+*.dll
+*.exe
+*.lib
+*.o
+*.obj
+*.so
+
+# Test and sanitizer artifacts
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+asan.log*
+ubsan.log*
+tsan.log*
+
+# Editor and local environment files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.user
+
+# Local runtime outputs
+reports/
+logs/
+tmp/

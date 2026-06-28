@@ -1,0 +1,95 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "mac-debug",
+      "displayName": "macOS Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/mac-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "mac-release",
+      "displayName": "macOS Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/mac-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "mac-asan",
+      "displayName": "macOS AddressSanitizer",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/mac-asan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address"
+      }
+    },
+    {
+      "name": "mac-ubsan",
+      "displayName": "macOS UndefinedBehaviorSanitizer",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/mac-ubsan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-fsanitize=undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=undefined",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=undefined"
+      }
+    },
+    {
+      "name": "mac-tsan",
+      "displayName": "macOS ThreadSanitizer",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/mac-tsan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=thread"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "mac-debug",
+      "configurePreset": "mac-debug"
+    },
+    {
+      "name": "mac-release",
+      "configurePreset": "mac-release"
+    },
+    {
+      "name": "mac-asan",
+      "configurePreset": "mac-asan"
+    },
+    {
+      "name": "mac-ubsan",
+      "configurePreset": "mac-ubsan"
+    },
+    {
+      "name": "mac-tsan",
+      "configurePreset": "mac-tsan"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "mac-debug",
+      "configurePreset": "mac-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
