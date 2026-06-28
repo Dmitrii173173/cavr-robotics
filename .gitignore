@@ -4,6 +4,7 @@
 .LSOverride
 
 # Project notes and local planning files
+PROJECT_PLAN.md
 *.md
 !README.md
 goal.png
