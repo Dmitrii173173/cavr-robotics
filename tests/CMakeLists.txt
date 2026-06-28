@@ -40,3 +40,14 @@ target_compile_definitions(cavr_replay_scheduler_test
 )
 
 add_test(NAME cavr_replay_scheduler_test COMMAND cavr_replay_scheduler_test)
+
+add_executable(cavr_replay_interpolation_test
+  replay_interpolation_test.cpp
+)
+
+target_link_libraries(cavr_replay_interpolation_test
+  PRIVATE
+    CAVR::replay
+)
+
+add_test(NAME cavr_replay_interpolation_test COMMAND cavr_replay_interpolation_test)
