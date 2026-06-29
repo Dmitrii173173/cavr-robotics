@@ -1,4 +1,4 @@
-find_package(Qt6 QUIET COMPONENTS Widgets OpenGLWidgets Quick Quick3D Qml QuickWidgets)
+find_package(Qt6 QUIET COMPONENTS Widgets Quick Quick3D Qml QuickWidgets)
 
 if(NOT Qt6_FOUND)
   message(WARNING "Qt 6 (Widgets, Quick3D) was not found. The cavr-studio desktop application will not be built.")
@@ -13,8 +13,6 @@ add_executable(cavr-studio
   src/CameraView.hpp
   src/RobotController.cpp
   src/RobotController.hpp
-  src/SceneViewport.cpp
-  src/SceneViewport.hpp
   src/StudioWindow.cpp
   src/StudioWindow.hpp
   src/TimelineWidget.cpp
@@ -26,7 +24,6 @@ add_executable(cavr-studio
 target_link_libraries(cavr-studio
   PRIVATE
     Qt6::Widgets
-    Qt6::OpenGLWidgets
     Qt6::Quick
     Qt6::Quick3D
     Qt6::Qml

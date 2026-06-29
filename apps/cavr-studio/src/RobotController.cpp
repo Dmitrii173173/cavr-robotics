@@ -15,7 +15,7 @@ constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
 RobotController::RobotController(QObject* parent) : QObject(parent) {
   // connect -> discover profile -> plan -> validate -> execute
   static_cast<void>(manager_.connect(controller_, {"mock", "mock"}));
-  manager_.discover_profile();
+  static_cast<void>(manager_.discover_profile());
   manager_.set_plan(cavr::runtime::make_demo_plan());
   static_cast<void>(manager_.validate());
   static_cast<void>(manager_.execute("studio_session_0"));
