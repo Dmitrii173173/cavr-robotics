@@ -1,0 +1,137 @@
+name: Release
+
+# Cutting a release is fully automatic: push a tag like `v0.1.0` and this builds,
+# bundles and publishes per-platform archives to a GitHub Release.
+on:
+  push:
+    tags: [ 'v*' ]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: cavr-studio-linux-x64
+          - os: macos-latest
+            artifact: cavr-studio-macos
+          - os: windows-latest
+            artifact: cavr-studio-windows-x64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Linux GUI build deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev libxkbcommon-dev
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          modules: 'qtquick3d qtshadertools qtquicktimeline qt5compat'
+          cache: true
+
+      - name: Install CMake + Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Enable MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCAVR_BUILD_APPS=ON
+          -DCAVR_BUILD_ADAPTERS=ON
+          -DCAVR_BUILD_TESTS=OFF
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dist = "dist/${{ matrix.artifact }}"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          Copy-Item build/apps/cavr-studio/cavr-studio.exe $dist
+          if (Test-Path build/apps/cavr-play/cavr-play.exe) { Copy-Item build/apps/cavr-play/cavr-play.exe $dist }
+          windeployqt --qmldir apps/cavr-studio/qml "$dist/cavr-studio.exe"
+          Copy-Item -Recurse assets "$dist/assets"
+          Copy-Item README.md "$dist/"
+          Compress-Archive -Path "$dist/*" -DestinationPath "${{ matrix.artifact }}.zip"
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -e
+          dist="dist/${{ matrix.artifact }}"
+          mkdir -p "$dist"
+          if [ -d build/apps/cavr-studio/cavr-studio.app ]; then
+            macdeployqt build/apps/cavr-studio/cavr-studio.app -qmldir=apps/cavr-studio/qml || true
+            cp -R build/apps/cavr-studio/cavr-studio.app "$dist"/
+          else
+            cp build/apps/cavr-studio/cavr-studio "$dist"/ || true
+          fi
+          [ -f build/apps/cavr-play/cavr-play ] && cp build/apps/cavr-play/cavr-play "$dist"/ || true
+          cp -R assets "$dist/assets"
+          cp README.md "$dist/"
+          ( cd dist && zip -r -y "../${{ matrix.artifact }}.zip" "${{ matrix.artifact }}" )
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -e
+          dist="dist/${{ matrix.artifact }}"
+          mkdir -p "$dist"
+          cp build/apps/cavr-studio/cavr-studio "$dist"/ || true
+          [ -f build/apps/cavr-play/cavr-play ] && cp build/apps/cavr-play/cavr-play "$dist"/ || true
+          cp -R assets "$dist/assets"
+          cp README.md "$dist/"
+          # Qt is dynamically linked; ship a launcher that points at a local Qt.
+          cat > "$dist/run-studio.sh" <<'EOF'
+          #!/usr/bin/env bash
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          : "${QT_DIR:?Set QT_DIR to a Qt 6.8 install (lib/ + qml/) before running}"
+          export LD_LIBRARY_PATH="$QT_DIR/lib:$LD_LIBRARY_PATH"
+          export QML_IMPORT_PATH="$QT_DIR/qml"
+          export QT_PLUGIN_PATH="$QT_DIR/plugins"
+          exec "$DIR/cavr-studio" "$@"
+          EOF
+          chmod +x "$dist/run-studio.sh"
+          tar czf "${{ matrix.artifact }}.tar.gz" -C dist "${{ matrix.artifact }}"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.zip
+            ${{ matrix.artifact }}.tar.gz
+          if-no-files-found: ignore
+
+  release:
+    name: publish release
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: artifacts/**/*
