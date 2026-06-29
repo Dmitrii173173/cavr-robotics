@@ -9,4 +9,5 @@ target_include_directories(cavr_adapter_sdk
 target_link_libraries(cavr_adapter_sdk
   INTERFACE
     CAVR::core
+    CAVR::machine
 )

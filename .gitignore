@@ -7,7 +7,12 @@
 PROJECT_PLAN.md
 *.md
 !README.md
+!docs/*.md
+!.github/*.md
 goal.png
+
+# Tooling logs
+aqtinstall.log
 
 # CMake and build outputs
 build/

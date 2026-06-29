@@ -1,0 +1,101 @@
+{
+  "schema": "cavr.robot_kinematics/1",
+  "name": "Yaskawa Motoman GP25",
+  "model": "GP25",
+  "manufacturer": "Yaskawa",
+  "controller": "YRC1000",
+  "dof": 6,
+  "structure": "6R vertical articulated",
+  "units": {
+    "length": "meters",
+    "angle": "radians",
+    "up_axis": "Y"
+  },
+  "specs": {
+    "payload_kg": 25,
+    "reach_mm": 1730,
+    "repeatability_mm": 0.06,
+    "mass_kg": 250,
+    "source": "Yaskawa Motoman GP25 datasheet (YRC1000)"
+  },
+  "asset": {
+    "mesh": "gp25.glb",
+    "format": "glTF 2.0 binary",
+    "base_node": "link_base",
+    "tcp_node": "tcp",
+    "note": "Pose the robot by setting each joint node's local rotation to the commanded angle about its axis. Mesh nodes are already offset so each joint node's origin lies on the rotation axis."
+  },
+  "tcp": {
+    "parent": "joint_t",
+    "node": "tcp",
+    "origin_m": [0.0, 0.0, 0.101],
+    "description": "Tool flange face centre, on the T axis."
+  },
+  "joints": [
+    {
+      "name": "S", "axis_index": 1,
+      "node": "joint_s", "link": "link_s", "parent": "link_base",
+      "type": "revolute",
+      "origin_m": [0.0, 0.169, 0.0],
+      "axis": [0.0, 1.0, 0.0],
+      "limit_deg": [-180.0, 180.0],
+      "max_speed_deg_s": 210.0,
+      "description": "Base swivel about the vertical axis."
+    },
+    {
+      "name": "L", "axis_index": 2,
+      "node": "joint_l", "link": "link_l", "parent": "joint_s",
+      "type": "revolute",
+      "origin_m": [-0.157, 0.336, 0.150],
+      "axis": [1.0, 0.0, 0.0],
+      "limit_deg": [-105.0, 155.0],
+      "max_speed_deg_s": 210.0,
+      "description": "Lower-arm pitch."
+    },
+    {
+      "name": "U", "axis_index": 3,
+      "node": "joint_u", "link": "link_u", "parent": "joint_l",
+      "type": "revolute",
+      "origin_m": [0.157, 0.760, 0.0],
+      "axis": [1.0, 0.0, 0.0],
+      "limit_deg": [-86.0, 160.0],
+      "max_speed_deg_s": 265.0,
+      "description": "Upper-arm pitch."
+    },
+    {
+      "name": "R", "axis_index": 4,
+      "node": "joint_r", "link": "link_r", "parent": "joint_u",
+      "type": "revolute",
+      "origin_m": [0.0, 0.200, 0.302],
+      "axis": [0.0, 0.0, 1.0],
+      "limit_deg": [-200.0, 200.0],
+      "max_speed_deg_s": 420.0,
+      "description": "Forearm roll."
+    },
+    {
+      "name": "B", "axis_index": 5,
+      "node": "joint_b", "link": "link_b", "parent": "joint_r",
+      "type": "revolute",
+      "origin_m": [0.0, 0.0, 0.493],
+      "axis": [1.0, 0.0, 0.0],
+      "limit_deg": [-150.0, 150.0],
+      "max_speed_deg_s": 420.0,
+      "description": "Wrist bend."
+    },
+    {
+      "name": "T", "axis_index": 6,
+      "node": "joint_t", "link": "link_t", "parent": "joint_b",
+      "type": "revolute",
+      "origin_m": [0.0, 0.0, 0.0],
+      "axis": [0.0, 0.0, 1.0],
+      "limit_deg": [-455.0, 455.0],
+      "max_speed_deg_s": 885.0,
+      "description": "Tool flange roll (concentric with B)."
+    }
+  ],
+  "materials": {
+    "Yaskawa_Orange": { "links": ["link_s","link_l","link_u","link_r","link_b"], "type": "painted", "base_color": "#e85f12" },
+    "Cast_Metal":     { "links": ["link_base"], "type": "metal", "base_color": "#3b3f45" },
+    "Machined_Steel": { "links": ["link_t"], "type": "metal", "base_color": "#c9ccd1" }
+  }
+}

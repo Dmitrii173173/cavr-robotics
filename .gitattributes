@@ -1,0 +1,11 @@
+# Normalize text to LF in the repo for consistent cross-platform builds.
+* text=auto eol=lf
+
+# Keep binary assets out of text normalization.
+*.png binary
+*.jpg binary
+*.stp binary
+*.SLDASM binary
+
+# Large 3D meshes via Git LFS.
+*.glb filter=lfs diff=lfs merge=lfs -text

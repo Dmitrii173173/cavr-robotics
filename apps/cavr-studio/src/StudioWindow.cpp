@@ -1,10 +1,13 @@
 #include "StudioWindow.hpp"
 
 #include "CameraView.hpp"
-#include "SceneViewport.hpp"
+#include "RobotController.hpp"
 #include "TimelineWidget.hpp"
 
 #include <QAction>
+#include <QQmlContext>
+#include <QQuickWidget>
+#include <QUrl>
 #include <QDockWidget>
 #include <QFormLayout>
 #include <QFrame>
@@ -42,10 +45,36 @@ StudioWindow::StudioWindow(QWidget* parent) : QMainWindow(parent) {
   resize(1536, 1024);
   setMinimumSize(1180, 760);
 
+  controller_ = new RobotController(this);
+
   configure_chrome();
-  setCentralWidget(new SceneViewport(this));
+  setCentralWidget(create_robot_viewport());
   create_docks();
   apply_theme();
+
+  // live telemetry -> Events dock + status bar
+  connect(controller_, &RobotController::eventLogged, this, [this](const QString& text) {
+    if (!events_list_) return;
+    events_list_->addItem(text);
+    events_list_->scrollToBottom();
+    while (events_list_->count() > 200) delete events_list_->takeItem(0);
+  });
+  connect(controller_, &RobotController::phaseChanged, this, [this](const QString& phase) {
+    if (status_phase_) status_phase_->setText("Phase: " + phase);
+  });
+}
+
+QWidget* StudioWindow::create_robot_viewport() {
+  auto* viewport = new QQuickWidget(this);
+  viewport->setResizeMode(QQuickWidget::SizeRootObjectToView);
+  viewport->setMinimumSize(520, 380);
+
+  const QString glb =
+      QString::fromUtf8(CAVR_ASSETS_DIR) + "/robots/yaskawa_gp25/gp25.glb";
+  viewport->rootContext()->setContextProperty("robotUrl", QUrl::fromLocalFile(glb));
+  viewport->rootContext()->setContextProperty("robot", controller_);
+  viewport->setSource(QUrl("qrc:/qml/RobotViewport.qml"));
+  return viewport;
 }
 
 void StudioWindow::configure_chrome() {
@@ -64,7 +93,8 @@ void StudioWindow::configure_chrome() {
   toolbar->addSeparator();
   toolbar->addWidget(new QLabel("weld_scan_2025_05_10.mcap"));
 
-  statusBar()->addWidget(new QLabel("Ready"));
+  status_phase_ = new QLabel("Phase: starting");
+  statusBar()->addWidget(status_phase_);
   statusBar()->addPermanentWidget(new QLabel("CPU 18%"));
   statusBar()->addPermanentWidget(new QLabel("RAM 2.1 GB"));
   statusBar()->addPermanentWidget(new QLabel("Dropped camera: 12 (0.02%)"));
@@ -130,12 +160,8 @@ QWidget* StudioWindow::make_channels_panel() {
 
 QWidget* StudioWindow::make_events_panel() {
   auto* list = new QListWidget;
-  list->addItem("00:00:00.000  Session started");
-  list->addItem("00:00:01.234  Robot program started");
-  list->addItem("00:00:02.345  Camera connected");
-  list->addItem("00:00:10.987  Calibration loaded");
-  list->addItem("00:01:45.678  Warning: frame drop");
-  list->addItem("00:02:34.893  Session stopped");
+  list->addItem("session_started | live telemetry from mock controller");
+  events_list_ = list;
   return list;
 }
 

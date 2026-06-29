@@ -4,6 +4,9 @@
 
 class QDockWidget;
 class QWidget;
+class QLabel;
+class QListWidget;
+class RobotController;
 
 class StudioWindow final : public QMainWindow {
  public:
@@ -13,6 +16,12 @@ class StudioWindow final : public QMainWindow {
   void configure_chrome();
   void create_docks();
   void apply_theme();
+
+  [[nodiscard]] QWidget* create_robot_viewport();
+
+  RobotController* controller_{nullptr};
+  QListWidget* events_list_{nullptr};
+  QLabel* status_phase_{nullptr};
 
   [[nodiscard]] QDockWidget* make_dock(const QString& title, QWidget* widget);
   [[nodiscard]] QWidget* make_session_panel();

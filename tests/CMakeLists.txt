@@ -51,3 +51,30 @@ target_link_libraries(cavr_replay_interpolation_test
 )
 
 add_test(NAME cavr_replay_interpolation_test COMMAND cavr_replay_interpolation_test)
+
+add_executable(cavr_visualization_robot_model_test
+  visualization_robot_model_test.cpp
+)
+
+target_link_libraries(cavr_visualization_robot_model_test
+  PRIVATE
+    CAVR::visualization
+    CAVR::core
+)
+
+add_test(NAME cavr_visualization_robot_model_test COMMAND cavr_visualization_robot_model_test)
+
+add_executable(cavr_runtime_workflow_test
+  runtime_workflow_test.cpp
+)
+
+target_link_libraries(cavr_runtime_workflow_test
+  PRIVATE
+    CAVR::runtime
+    CAVR::machine
+    CAVR::validation
+    CAVR::adapter_mock_robot
+    CAVR::core
+)
+
+add_test(NAME cavr_runtime_workflow_test COMMAND cavr_runtime_workflow_test)

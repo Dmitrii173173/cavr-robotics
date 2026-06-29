@@ -10,4 +10,5 @@ target_link_libraries(cavr_validation
   INTERFACE
     CAVR::core
     CAVR::time
+    CAVR::machine
 )

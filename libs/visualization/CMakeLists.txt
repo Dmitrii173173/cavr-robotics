@@ -5,3 +5,8 @@ target_include_directories(cavr_visualization
   INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
+
+target_link_libraries(cavr_visualization
+  INTERFACE
+    CAVR::core
+)
