@@ -19,7 +19,7 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact: cavr-studio-linux-x64
-          - os: macos-latest
+          - os: macos-13
             artifact: cavr-studio-macos
           - os: windows-latest
             artifact: cavr-studio-windows-x64
