@@ -1,14 +1,14 @@
-add_library(twinreplay_record INTERFACE)
-add_library(TwinReplay::record ALIAS twinreplay_record)
+add_library(cavr_record INTERFACE)
+add_library(CAVR::record ALIAS cavr_record)
 
-target_include_directories(twinreplay_record
+target_include_directories(cavr_record
   INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
-target_link_libraries(twinreplay_record
+target_link_libraries(cavr_record
   INTERFACE
-    TwinReplay::core
-    TwinReplay::time
-    TwinReplay::adapter_sdk
+    CAVR::core
+    CAVR::time
+    CAVR::adapter_sdk
 )

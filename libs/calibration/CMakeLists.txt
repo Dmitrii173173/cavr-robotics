@@ -1,13 +1,13 @@
-add_library(twinreplay_calibration INTERFACE)
-add_library(TwinReplay::calibration ALIAS twinreplay_calibration)
+add_library(cavr_calibration INTERFACE)
+add_library(CAVR::calibration ALIAS cavr_calibration)
 
-target_include_directories(twinreplay_calibration
+target_include_directories(cavr_calibration
   INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
-target_link_libraries(twinreplay_calibration
+target_link_libraries(cavr_calibration
   INTERFACE
-    TwinReplay::core
-    TwinReplay::frame_graph
+    CAVR::core
+    CAVR::frame_graph
 )
