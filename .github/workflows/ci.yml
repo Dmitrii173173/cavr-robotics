@@ -56,9 +56,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS uses macos-13: Qt 6.8's prebuilt QtOpenGL still references the
-        # AGL framework, which was removed from the macOS 14+ SDK (macos-latest).
-        os: [ ubuntu-latest, macos-13, windows-latest ]
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -82,7 +80,32 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Configure
+      # Qt 6.8's prebuilt libs carry a stale link reference to the legacy AGL
+      # framework, removed from the macOS 14+ SDK. Provide an empty stub so the
+      # link succeeds (Qt does not actually call AGL); lets us use fast runners.
+      - name: AGL stub (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -e
+          FW="$RUNNER_TEMP/agl-stub"
+          mkdir -p "$FW/AGL.framework/Versions/A"
+          clang -dynamiclib -o "$FW/AGL.framework/Versions/A/AGL" -x c /dev/null \
+            -install_name /System/Library/Frameworks/AGL.framework/Versions/A/AGL
+          ln -sf Versions/A/AGL "$FW/AGL.framework/AGL"
+          echo "CAVR_MAC_LDFLAGS=-F$FW" >> "$GITHUB_ENV"
+
+      - name: Configure (Unix)
+        if: runner.os != 'Windows'
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCAVR_BUILD_APPS=ON
+          -DCAVR_BUILD_ADAPTERS=ON
+          -DCAVR_BUILD_TESTS=OFF
+          -DCMAKE_EXE_LINKER_FLAGS="${CAVR_MAC_LDFLAGS}"
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
         run: >
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release

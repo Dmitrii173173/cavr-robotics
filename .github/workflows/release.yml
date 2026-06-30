@@ -19,7 +19,7 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact: cavr-studio-linux-x64
-          - os: macos-13
+          - os: macos-latest
             artifact: cavr-studio-macos
           - os: windows-latest
             artifact: cavr-studio-windows-x64
@@ -46,7 +46,30 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Configure
+      # See ci.yml: stub the removed AGL framework so Qt links on macos-latest.
+      - name: AGL stub (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -e
+          FW="$RUNNER_TEMP/agl-stub"
+          mkdir -p "$FW/AGL.framework/Versions/A"
+          clang -dynamiclib -o "$FW/AGL.framework/Versions/A/AGL" -x c /dev/null \
+            -install_name /System/Library/Frameworks/AGL.framework/Versions/A/AGL
+          ln -sf Versions/A/AGL "$FW/AGL.framework/AGL"
+          echo "CAVR_MAC_LDFLAGS=-F$FW" >> "$GITHUB_ENV"
+
+      - name: Configure (Unix)
+        if: runner.os != 'Windows'
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCAVR_BUILD_APPS=ON
+          -DCAVR_BUILD_ADAPTERS=ON
+          -DCAVR_BUILD_TESTS=OFF
+          -DCMAKE_EXE_LINKER_FLAGS="${CAVR_MAC_LDFLAGS}"
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
         run: >
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
