@@ -11,4 +11,5 @@ target_link_libraries(cavr_record
     CAVR::core
     CAVR::time
     CAVR::adapter_sdk
+    CAVR::machine  # cavr::json, the project's hand-rolled JSON used by the reference backend
 )

@@ -12,4 +12,6 @@ target_link_libraries(cavr_runtime
     CAVR::machine
     CAVR::adapter_sdk
     CAVR::validation
+    CAVR::record   # SessionLog <-> recording bridge (record_session.hpp)
+    CAVR::catalog  # recording -> CatalogSession indexer (catalog_index.hpp)
 )
