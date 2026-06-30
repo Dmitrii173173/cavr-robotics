@@ -8,8 +8,10 @@
 // every recorded frame comes from adapter.poll(). The recorded SessionLog can be
 // saved and replayed.
 
+#include <cavr/adapter_sdk/camera_adapter.hpp>
 #include <cavr/adapter_sdk/controller_adapter.hpp>
 #include <cavr/runtime/session.hpp>
+#include <cavr/runtime/session_recorder.hpp>
 #include <cavr/runtime/timeline.hpp>
 #include <cavr/validation/trajectory_validator.hpp>
 
@@ -30,6 +32,19 @@ class SessionManager final {
   [[nodiscard]] const SessionLog& log() const noexcept { return log_; }
   [[nodiscard]] const sdk::RobotState& latest() const noexcept { return latest_; }
   [[nodiscard]] bool running() const noexcept { return phase_ == SessionPhase::Executing; }
+
+  // Attach a live recorder to stream telemetry to disk as it arrives. Optional:
+  // with none attached the manager behaves exactly as before (in-memory log only).
+  // The caller owns the recorder and finalizes it (recorder.finish(log())) once
+  // the run loop ends; the manager only feeds frames during execution.
+  void attach_recorder(SessionRecorder& recorder) noexcept { recorder_ = &recorder; }
+
+  // Attach a camera source. When set, each tick() also polls the camera, so its
+  // frames are captured on the same clock as the robot telemetry (synchronized);
+  // any frame is streamed to the attached recorder.
+  void attach_camera(sdk::CameraAdapter& camera) noexcept { camera_ = &camera; }
+  [[nodiscard]] bool has_camera_frame() const noexcept { return has_camera_; }
+  [[nodiscard]] const sdk::CameraFrame& latest_camera() const noexcept { return latest_camera_; }
 
   [[nodiscard]] sdk::ConnectResult connect(sdk::ControllerAdapter& adapter,
                                            const sdk::ConnectionInfo& info) {
@@ -75,6 +90,8 @@ class SessionManager final {
     log_.timeline.events.clear();
     started_clock_ = false;
     phase_ = SessionPhase::Executing;
+    if (camera_ && !camera_->is_open()) (void)camera_->open();
+    if (recorder_) recorder_->begin();
     return true;
   }
 
@@ -90,6 +107,17 @@ class SessionManager final {
     for (const auto& e : latest_.events) {
       log_.timeline.add_controller_event(e, latest_.current_step);
     }
+    if (recorder_) recorder_->record_frame(latest_);  // stream this frame to disk
+
+    // Capture a camera frame on the same tick so robot + vision stay synchronized.
+    if (camera_) {
+      if (auto frame = camera_->poll(now)) {
+        latest_camera_ = std::move(*frame);
+        has_camera_ = true;
+        if (recorder_) recorder_->record_camera_frame(latest_camera_);
+      }
+    }
+
     if (latest_.program_state == machine::ProgramState::Completed) {
       phase_ = SessionPhase::Completed;
     }
@@ -104,10 +132,14 @@ class SessionManager final {
 
  private:
   sdk::ControllerAdapter* adapter_{nullptr};
+  SessionRecorder* recorder_{nullptr};  // optional live telemetry sink
+  sdk::CameraAdapter* camera_{nullptr};  // optional synchronized vision source
   SessionPhase phase_{SessionPhase::Disconnected};
   Timeline plan_;
   SessionLog log_;
   sdk::RobotState latest_;
+  sdk::CameraFrame latest_camera_;
+  bool has_camera_{false};
   bool started_clock_{false};
 };
 

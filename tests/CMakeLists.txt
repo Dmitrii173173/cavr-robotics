@@ -78,3 +78,138 @@ target_link_libraries(cavr_runtime_workflow_test
 )
 
 add_test(NAME cavr_runtime_workflow_test COMMAND cavr_runtime_workflow_test)
+
+add_executable(cavr_record_recording_test
+  record_recording_test.cpp
+)
+
+target_link_libraries(cavr_record_recording_test
+  PRIVATE
+    CAVR::record
+)
+
+add_test(NAME cavr_record_recording_test COMMAND cavr_record_recording_test)
+
+if(CAVR_ENABLE_MCAP)
+  add_executable(cavr_storage_mcap_recording_test
+    storage_mcap_recording_test.cpp
+  )
+
+  target_link_libraries(cavr_storage_mcap_recording_test
+    PRIVATE
+      CAVR::storage_mcap
+      CAVR::record
+  )
+
+  add_test(NAME cavr_storage_mcap_recording_test COMMAND cavr_storage_mcap_recording_test)
+endif()
+
+add_executable(cavr_runtime_session_recording_test
+  runtime_session_recording_test.cpp
+)
+
+target_link_libraries(cavr_runtime_session_recording_test
+  PRIVATE
+    CAVR::runtime
+    CAVR::record
+    CAVR::adapter_mock_robot
+    CAVR::machine
+    CAVR::validation
+    CAVR::core
+)
+
+# Also exercise the bridge through the MCAP backend when it is built.
+if(CAVR_ENABLE_MCAP)
+  target_link_libraries(cavr_runtime_session_recording_test PRIVATE CAVR::storage_mcap)
+  target_compile_definitions(cavr_runtime_session_recording_test PRIVATE CAVR_WITH_MCAP)
+endif()
+
+add_test(NAME cavr_runtime_session_recording_test COMMAND cavr_runtime_session_recording_test)
+
+add_executable(cavr_runtime_session_recorder_test
+  runtime_session_recorder_test.cpp
+)
+
+target_link_libraries(cavr_runtime_session_recorder_test
+  PRIVATE
+    CAVR::runtime
+    CAVR::record
+    CAVR::adapter_mock_robot
+    CAVR::machine
+    CAVR::validation
+    CAVR::core
+)
+
+if(CAVR_ENABLE_MCAP)
+  target_link_libraries(cavr_runtime_session_recorder_test PRIVATE CAVR::storage_mcap)
+  target_compile_definitions(cavr_runtime_session_recorder_test PRIVATE CAVR_WITH_MCAP)
+endif()
+
+add_test(NAME cavr_runtime_session_recorder_test COMMAND cavr_runtime_session_recorder_test)
+
+add_executable(cavr_runtime_camera_recording_test
+  runtime_camera_recording_test.cpp
+)
+
+target_link_libraries(cavr_runtime_camera_recording_test
+  PRIVATE
+    CAVR::runtime
+    CAVR::record
+    CAVR::adapter_mock_robot
+    CAVR::adapter_mock_camera
+    CAVR::machine
+    CAVR::validation
+    CAVR::core
+)
+
+if(CAVR_ENABLE_MCAP)
+  target_link_libraries(cavr_runtime_camera_recording_test PRIVATE CAVR::storage_mcap)
+  target_compile_definitions(cavr_runtime_camera_recording_test PRIVATE CAVR_WITH_MCAP)
+endif()
+
+add_test(NAME cavr_runtime_camera_recording_test COMMAND cavr_runtime_camera_recording_test)
+
+add_executable(cavr_catalog_test
+  catalog_test.cpp
+)
+
+target_link_libraries(cavr_catalog_test
+  PRIVATE
+    CAVR::catalog
+)
+
+if(CAVR_ENABLE_SQLITE)
+  target_compile_definitions(cavr_catalog_test PRIVATE CAVR_WITH_SQLITE)
+  # the test fabricates a future-version database directly; sqlite symbols come
+  # from CAVR::catalog, this only adds the vendored header to its include path.
+  target_include_directories(cavr_catalog_test PRIVATE ${CMAKE_SOURCE_DIR}/third_party/sqlite)
+endif()
+
+add_test(NAME cavr_catalog_test COMMAND cavr_catalog_test)
+
+add_executable(cavr_runtime_catalog_index_test
+  runtime_catalog_index_test.cpp
+)
+
+target_link_libraries(cavr_runtime_catalog_index_test
+  PRIVATE
+    CAVR::runtime
+    CAVR::record
+    CAVR::catalog
+    CAVR::adapter_mock_robot
+    CAVR::adapter_mock_camera
+    CAVR::machine
+    CAVR::validation
+    CAVR::core
+)
+
+if(CAVR_ENABLE_MCAP)
+  target_link_libraries(cavr_runtime_catalog_index_test PRIVATE CAVR::storage_mcap)
+  target_compile_definitions(cavr_runtime_catalog_index_test PRIVATE CAVR_WITH_MCAP)
+endif()
+
+if(CAVR_ENABLE_SQLITE)
+  target_compile_definitions(cavr_runtime_catalog_index_test PRIVATE CAVR_WITH_SQLITE)
+endif()
+
+add_test(NAME cavr_runtime_catalog_index_test COMMAND cavr_runtime_catalog_index_test)
