@@ -97,19 +97,19 @@ namespace detail {
 }  // namespace detail
 
 // Solves for joint values whose TCP pose matches `target`, seeded from `seed`
-// (typically the current pose, so the nearest solution is found). `tcp_offset_m`
-// matches the offset passed to forward_kinematics.
+// (typically the current pose, so the nearest solution is found). `tcp_offset`
+// is the tool offset (pose in the flange frame) matching forward_kinematics.
 [[nodiscard]] inline IkResult inverse_kinematics(const std::vector<AxisSpec>& axes,
                                                  const core::Pose3D& target,
                                                  const std::vector<double>& seed,
-                                                 const core::Vec3& tcp_offset_m = {},
+                                                 const core::Pose3D& tcp_offset,
                                                  const IkOptions& options = {}) {
   const std::size_t n = axes.size();
   IkResult result;
   result.joints = seed;
   result.joints.resize(n, 0.0);
 
-  auto tcp_of = [&](const std::vector<double>& q) { return forward_kinematics(axes, q, tcp_offset_m).tcp; };
+  auto tcp_of = [&](const std::vector<double>& q) { return forward_kinematics(axes, q, tcp_offset).tcp; };
 
   for (int iter = 0; iter < options.max_iterations; ++iter) {
     result.iterations = iter + 1;
@@ -175,6 +175,16 @@ namespace detail {
   }
 
   return result;
+}
+
+// Convenience overload for a position-only TCP offset.
+[[nodiscard]] inline IkResult inverse_kinematics(const std::vector<AxisSpec>& axes,
+                                                 const core::Pose3D& target,
+                                                 const std::vector<double>& seed,
+                                                 const core::Vec3& tcp_offset_m = {},
+                                                 const IkOptions& options = {}) {
+  return inverse_kinematics(axes, target, seed,
+                            core::Pose3D{tcp_offset_m, core::Quaternion::identity()}, options);
 }
 
 }  // namespace cavr::machine

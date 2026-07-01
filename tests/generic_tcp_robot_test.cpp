@@ -297,7 +297,7 @@ void test_mock_cartesian_move_to() {
   machine::MotionCommand jog;
   jog.kind = machine::MotionKind::MoveL;
   jog.target.pose = target;
-  jog.speed = 3.0;
+  jog.speed = 500.0;  // mm/s (Cartesian speed)
   check(controller.move_to(jog), "mock accepts a Cartesian jog (IK converges)");
 
   sdk::RobotState s;
@@ -311,6 +311,30 @@ void test_mock_cartesian_move_to() {
   const double dz = s.tcp_pose.position_m.z_m - target.position_m.z_m;
   check(std::sqrt(dx * dx + dy * dy + dz * dz) < 2.0e-3,
         "mock Cartesian jog reaches the commanded TCP position");
+}
+
+// A calibrated tool changes the TCP: extending the tool along Z pushes the
+// reported TCP further from the flange by the tool length.
+void test_tool_offset_moves_tcp() {
+  mock::MockController controller;
+  (void)controller.connect({"mock", "mock"});
+  machine::ToolTable* tools = controller.tools();
+  check(tools != nullptr, "mock exposes a tool table");
+  if (!tools) return;
+  check(tools->size() == 10, "tool table has 10 slots");
+
+  const sdk::RobotState with_flange = controller.poll(cavr::core::Timestamp::from_nanoseconds(0));
+
+  // Calibrate slot 1 as a 0.3 m tool along Z and select it.
+  tools->set_tool(1, cavr::core::Pose3D{cavr::core::Vec3{0, 0, 0.3}, cavr::core::Quaternion::identity()},
+                  "long torch");
+  check(tools->select(1), "select the calibrated tool");
+  const sdk::RobotState with_tool = controller.poll(cavr::core::Timestamp::from_nanoseconds(20'000'000));
+
+  // At home the arm points up, so a longer tool raises the TCP height. Either way
+  // the TCP must move by ~0.2 m (0.3 − the 0.101 flange tool) relative to before.
+  const double dz = with_tool.tcp_pose.position_m.z_m - with_flange.tcp_pose.position_m.z_m;
+  check(std::abs(dz - 0.199) < 1e-3, "selecting a longer tool moves the TCP by the tool-length delta");
 }
 
 // A bad endpoint fails cleanly rather than hanging or crashing.
@@ -332,6 +356,7 @@ int main() {
   test_move_to_jog();
   test_mock_move_to();
   test_mock_cartesian_move_to();
+  test_tool_offset_moves_tcp();
   test_connect_failure();
 
   if (failures != 0) {

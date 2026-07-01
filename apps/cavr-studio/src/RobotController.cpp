@@ -121,25 +121,71 @@ void RobotController::jogJoint(int axis, double delta_deg) {
   publish();
 }
 
-void RobotController::jogCartesian(double dx_m, double dy_m, double dz_m) {
-  // Shift the current TCP position, keep its orientation, and let the controller
-  // solve inverse kinematics for the new pose (MoveL-style Cartesian jog).
+void RobotController::jogCartesian(double dx_m, double dy_m, double dz_m,
+                                   double drx_rad, double dry_rad, double drz_rad) {
+  // Move the TCP by the given delta expressed in the selected coordinate system,
+  // then let the controller solve IK for the resulting pose (MoveL-style jog).
   const auto& latest = manager_.latest();
-  cavr::core::Pose3D target = latest.tcp_pose;
-  target.position_m.x_m += dx_m;
-  target.position_m.y_m += dy_m;
-  target.position_m.z_m += dz_m;
+
+  // The User frame, when selected, comes from the profile's first User frame.
+  cavr::core::Pose3D user_frame;
+  for (const auto& f : manager_.profile().frames) {
+    if (f.kind == cavr::machine::FrameKind::User) { user_frame = f.transform; break; }
+  }
+
+  const cavr::core::Pose3D target = cavr::machine::jog_in_frame(
+      latest.tcp_pose, coord_sys_, {dx_m, dy_m, dz_m}, {drx_rad, dry_rad, drz_rad}, user_frame);
 
   cavr::machine::MotionCommand cmd;
   cmd.kind = cavr::machine::MotionKind::MoveL;
   cmd.target.pose = target;
-  cmd.speed = 45.0 * 3.14159265358979323846 / 180.0;
+  cmd.speed = speed_mm_s_;  // mm/s
   cmd.label = "jog cartesian";
   manual_ = true;
   if (!controller_->move_to(cmd)) {
     emit eventLogged("jog cartesian | target unreachable (IK did not converge)");
   }
   publish();
+}
+
+void RobotController::setCoordinateSystem(int system) {
+  switch (system) {
+    case 0: coord_sys_ = cavr::machine::CoordinateSystem::World; break;
+    case 2: coord_sys_ = cavr::machine::CoordinateSystem::Tool; break;
+    case 3: coord_sys_ = cavr::machine::CoordinateSystem::User; break;
+    case 1:
+    default: coord_sys_ = cavr::machine::CoordinateSystem::Base; break;
+  }
+  emit eventLogged(QString("coordinate system | ") + cavr::machine::to_string(coord_sys_));
+}
+
+void RobotController::setSpeedMmS(double mm_s) {
+  if (mm_s > 0.0) speed_mm_s_ = mm_s;
+}
+
+void RobotController::selectTool(int slot) {
+  if (auto* tools = controller_->tools(); tools && tools->select(slot)) {
+    emit eventLogged(QString("tool | selected slot %1").arg(slot));
+    publish();
+  }
+}
+
+void RobotController::calibrateTool(int slot, double x_m, double y_m, double z_m) {
+  if (auto* tools = controller_->tools()) {
+    tools->set_tool(static_cast<std::size_t>(slot),
+                    cavr::core::Pose3D{cavr::core::Vec3{x_m, y_m, z_m}, cavr::core::Quaternion::identity()});
+    emit eventLogged(QString("tool | calibrated slot %1 TCP (%2, %3, %4) m")
+                         .arg(slot).arg(x_m).arg(y_m).arg(z_m));
+    publish();
+  }
+}
+
+void RobotController::clearTool(int slot) {
+  if (auto* tools = controller_->tools()) {
+    tools->clear_tool(static_cast<std::size_t>(slot));
+    emit eventLogged(QString("tool | cleared slot %1").arg(slot));
+    publish();
+  }
 }
 
 void RobotController::runDemo() {

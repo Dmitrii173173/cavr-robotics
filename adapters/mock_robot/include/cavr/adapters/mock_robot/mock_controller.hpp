@@ -7,6 +7,7 @@
 // events). poll(now) advances the precomputed trajectory by wall-clock time.
 
 #include <cavr/adapter_sdk/controller_adapter.hpp>
+#include <cavr/machine/frames.hpp>
 #include <cavr/machine/ik.hpp>
 #include <cavr/machine/kinematics.hpp>
 #include <cavr/machine/machine_profile.hpp>
@@ -104,6 +105,17 @@ namespace sdk = cavr::adapter_sdk;
 
 class MockController final : public sdk::ControllerAdapter {
  public:
+  MockController() {
+    // Tool 0 is the bare flange TCP (the GP25's 0.101 m tool plate), pre-calibrated
+    // and selected — a real controller ships with its tools already calibrated.
+    tools_.set_tool(0, core::Pose3D{core::Vec3{0.0, 0.0, 0.101}, core::Quaternion::identity()},
+                    "flange TCP");
+    tools_.select(0);
+  }
+
+  // The controller's tool table (10 slots), for selection and calibration.
+  [[nodiscard]] machine::ToolTable* tools() override { return &tools_; }
+
   [[nodiscard]] sdk::ConnectResult connect(const sdk::ConnectionInfo& info) override {
     info_ = info;
     profile_ = make_gp25_profile();
@@ -146,23 +158,39 @@ class MockController final : public sdk::ControllerAdapter {
     std::vector<double> start = last_joints_.empty() ? std::vector<double>(dof(), 0.0) : last_joints_;
     start.resize(dof(), 0.0);
 
+    const core::Pose3D tool = tools_.current_offset();
     std::vector<double> target;
+    bool cartesian = false;
     if (command.target.joints) {
       target = *command.target.joints;
     } else if (command.target.pose) {
       const machine::IkResult ik =
-          machine::inverse_kinematics(profile_.axes, *command.target.pose, start, core::Vec3{0, 0, 0.101});
+          machine::inverse_kinematics(profile_.axes, *command.target.pose, start, tool);
       if (!ik.converged) return false;  // unreachable Cartesian target
       target = ik.joints;
+      cartesian = true;
     } else {
       return false;
     }
     target.resize(dof(), 0.0);
 
-    double max_delta = 0.0;
-    for (std::size_t i = 0; i < dof(); ++i) max_delta = std::max(max_delta, std::abs(target[i] - start[i]));
-    const double speed = command.speed > 0 ? command.speed : deg(60);
-    const double dur = std::max(0.1, max_delta / speed);
+    // Duration: a Cartesian move is timed by its TCP travel at the commanded
+    // mm/s; a joint move by its largest axis sweep at the commanded rad/s.
+    double dur;
+    if (cartesian) {
+      const core::Pose3D cur = forward_kinematics(profile_.axes, start, tool).tcp;
+      const core::Vec3 tp = command.target.pose->position_m;
+      const double dist_m = std::sqrt((tp.x_m - cur.position_m.x_m) * (tp.x_m - cur.position_m.x_m) +
+                                      (tp.y_m - cur.position_m.y_m) * (tp.y_m - cur.position_m.y_m) +
+                                      (tp.z_m - cur.position_m.z_m) * (tp.z_m - cur.position_m.z_m));
+      const double speed_mm_s = command.speed > 0 ? command.speed : 50.0;
+      dur = std::max(0.1, dist_m * 1000.0 / speed_mm_s);
+    } else {
+      double max_delta = 0.0;
+      for (std::size_t i = 0; i < dof(); ++i) max_delta = std::max(max_delta, std::abs(target[i] - start[i]));
+      const double speed = command.speed > 0 ? command.speed : deg(60);
+      dur = std::max(0.1, max_delta / speed);
+    }
 
     task_ = {command};
     waypoints_ = {std::move(start), std::move(target)};
@@ -307,7 +335,7 @@ class MockController final : public sdk::ControllerAdapter {
     s.current_step_label = step_label(step);
     s.speed_fraction = moving;
 
-    const auto fk = machine::forward_kinematics(profile_.axes, s.joint_positions, core::Vec3{0, 0, 0.101});
+    const auto fk = machine::forward_kinematics(profile_.axes, s.joint_positions, tools_.current_offset());
     s.tcp_pose = fk.tcp;
 
     const bool weld = step >= 0 && step < static_cast<int>(weld_active_.size()) && weld_active_[static_cast<std::size_t>(step)];
@@ -339,6 +367,7 @@ class MockController final : public sdk::ControllerAdapter {
   std::vector<char> weld_active_;
   double total_s_{0.0};
   mutable std::vector<double> last_joints_;  // last reported pose, so a jog starts from it
+  machine::ToolTable tools_;                 // 10 tool slots; the selected one defines the TCP
 
   bool connected_{false};
   bool started_{false};

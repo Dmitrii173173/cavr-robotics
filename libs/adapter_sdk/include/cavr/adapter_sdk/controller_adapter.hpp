@@ -12,6 +12,7 @@
 
 #include <cavr/adapter_sdk/robot_state.hpp>
 #include <cavr/core/time.hpp>
+#include <cavr/machine/frames.hpp>
 #include <cavr/machine/machine_profile.hpp>
 #include <cavr/machine/motion.hpp>
 
@@ -55,6 +56,11 @@ class ControllerAdapter {
   // jog / teleoperation from the scene (the scene -> robot direction). Returns
   // false if the controller does not support live motion. Default: unsupported.
   [[nodiscard]] virtual bool move_to(const machine::MotionCommand& /*command*/) { return false; }
+
+  // The controller's tool table (10 calibration slots), or nullptr when the tools
+  // are managed elsewhere (e.g. on a remote controller). Used to select and
+  // calibrate tools; the selected tool's offset defines the TCP.
+  [[nodiscard]] virtual machine::ToolTable* tools() { return nullptr; }
 
   // Latest telemetry for the given wall-clock instant.
   [[nodiscard]] virtual RobotState poll(core::Timestamp now) = 0;

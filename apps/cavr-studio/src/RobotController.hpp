@@ -15,6 +15,7 @@
 #include <cavr/adapter_sdk/controller_adapter.hpp>
 #include <cavr/adapters/generic_tcp_robot/generic_tcp_controller.hpp>
 #include <cavr/adapters/mock_robot/mock_controller.hpp>
+#include <cavr/machine/frames.hpp>
 #include <cavr/runtime/session_manager.hpp>
 
 #include <cstdint>
@@ -50,7 +51,15 @@ class RobotController final : public QObject {
   // manual mode so it holds the jogged pose instead of resuming the demo.
   Q_INVOKABLE void jogHome();
   Q_INVOKABLE void jogJoint(int axis, double delta_deg);   // relative single-axis move
-  Q_INVOKABLE void jogCartesian(double dx_m, double dy_m, double dz_m);  // relative TCP move (IK)
+  // Relative Cartesian jog (metres / radians) in the selected coordinate system,
+  // solved through IK. Translation and rotation components are independent.
+  Q_INVOKABLE void jogCartesian(double dx_m, double dy_m, double dz_m,
+                                double drx_rad, double dry_rad, double drz_rad);
+  Q_INVOKABLE void setCoordinateSystem(int system);        // 0 World, 1 Base, 2 Tool, 3 User
+  Q_INVOKABLE void setSpeedMmS(double mm_s);               // Cartesian jog speed
+  Q_INVOKABLE void selectTool(int slot);                   // choose the active tool
+  Q_INVOKABLE void calibrateTool(int slot, double x_m, double y_m, double z_m);  // set TCP offset
+  Q_INVOKABLE void clearTool(int slot);
   Q_INVOKABLE void runDemo();                              // leave manual mode, resume the demo
   Q_INVOKABLE bool saveSession(const QString& path);
 
@@ -70,6 +79,8 @@ class RobotController final : public QObject {
   std::unique_ptr<cavr::adapter_sdk::ControllerAdapter> controller_;
   bool remote_{false};
   bool manual_{false};  // set by jogging; suppresses the demo auto-restart
+  cavr::machine::CoordinateSystem coord_sys_{cavr::machine::CoordinateSystem::Base};
+  double speed_mm_s_{50.0};  // Cartesian jog speed
   cavr::runtime::SessionManager manager_;
   QTimer timer_;
   std::int64_t now_ns_{1'000'000'000};

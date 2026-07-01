@@ -95,14 +95,15 @@ hand-rolled). Dependency flow is a clean DAG.
   Set **`CAVR_ROBOT_ENDPOINT=host:port`** to drive the scene from a remote robot
   (e.g. `cavr-robotd`) — the virtual GP25 then mirrors the real robot's live
   motion (robot → scene digital twin). Unset, it runs the standalone mock demo.
-- The **Jog** panel (and Jog Home toolbar button) command the robot (mock or
-  remote) live via `ControllerAdapter::move_to` — the **scene → robot** direction.
-  Per-axis **joint jog** (±5°) and **Cartesian jog** (±5 cm X/Y/Z, solved through
-  `ik.hpp` inverse kinematics for a MoveL-style move) let the operator drive the
-  robot from the scene; jogging enters a manual hold (Run Demo resumes the cycle).
-  With both directions wired, CAVR Studio is a bidirectional twin: it mirrors the
-  robot's motion and can command it (verified live — joint jog rotates the base,
-  Cartesian jog shifts the TCP via IK, and the robot holds the jogged pose).
+- The **Jog** panel commands the robot (mock or remote) live via
+  `ControllerAdapter::move_to` — the **scene → robot** direction. It offers a
+  **coordinate-system selector** (World/Base/Tool/User), a **speed field (mm/s)**,
+  per-axis **joint jog** (±5°), full 6-axis **Cartesian jog** (X/Y/Z ±5 cm,
+  Rx/Ry/Rz ±5°) expressed in the selected frame and solved through `ik.hpp`, and a
+  **tool table** panel (select one of 10 slots, calibrate its TCP offset, clear).
+  Jogging enters a manual hold; Run Demo resumes the cycle. With both directions
+  wired, CAVR Studio is a bidirectional twin: it mirrors the robot's motion and
+  commands it in the standard robot motion model (frames, tools, mm/s Cartesian).
 
 ## Build / CI / Releases
 
@@ -111,13 +112,13 @@ hand-rolled). Dependency flow is a clean DAG.
   plus a Qt Studio build on 3 OSes.
 - **Releases** ([`release.yml`](../.github/workflows/release.yml)): push a `v*`
   tag → per-OS bundled archives published to a GitHub Release.
-- Tests (17, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
+- Tests (18, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
   `cavr_visualization_robot_model_test`, `cavr_runtime_workflow_test`
   (profile round-trip, validation, full session, save/replay),
   `cavr_record_recording_test`, `cavr_record_copy_test`,
   `cavr_storage_mcap_recording_test`, `cavr_runtime_session_recording_test`,
   `cavr_runtime_session_recorder_test`, `cavr_runtime_camera_recording_test`,
-  `cavr_catalog_test`, `cavr_runtime_catalog_index_test`, `cavr_file_camera_test`, `cavr_machine_ik_test`,
+  `cavr_catalog_test`, `cavr_runtime_catalog_index_test`, `cavr_file_camera_test`, `cavr_machine_ik_test`, `cavr_machine_frames_test`,
   `cavr_generic_tcp_robot_test` (a fake robot server over loopback TCP drives the
   adapter and a full `SessionManager` session, plus a scene → robot `move_to` jog
   end to end and the mock's own live jog).

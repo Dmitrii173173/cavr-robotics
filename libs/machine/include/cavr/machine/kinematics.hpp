@@ -85,10 +85,23 @@ struct ForwardPose final {
   core::Pose3D tcp;                  // tool-centre point
 };
 
+namespace detail {
+
+// Fills a Rigid's rotation from a unit quaternion.
+inline void set_rot_from_quat(Rigid& m, const core::Quaternion& q) noexcept {
+  const double x = q.x(), y = q.y(), z = q.z(), w = q.w();
+  m.r[0][0] = 1 - 2 * (y * y + z * z); m.r[0][1] = 2 * (x * y - z * w);     m.r[0][2] = 2 * (x * z + y * w);
+  m.r[1][0] = 2 * (x * y + z * w);     m.r[1][1] = 1 - 2 * (x * x + z * z); m.r[1][2] = 2 * (y * z - x * w);
+  m.r[2][0] = 2 * (x * z - y * w);     m.r[2][1] = 2 * (y * z + x * w);     m.r[2][2] = 1 - 2 * (x * x + y * y);
+}
+
+}  // namespace detail
+
+// FK with a full tool pose offset (position + orientation of the TCP in the
+// flange frame) — used for tool calibration where the tool tip is rotated too.
 // `q` are joint values (rad for revolute, m for prismatic), one per axis.
 [[nodiscard]] inline ForwardPose forward_kinematics(
-    const std::vector<AxisSpec>& axes, const std::vector<double>& q,
-    const core::Vec3& tcp_offset_m = {}) {
+    const std::vector<AxisSpec>& axes, const std::vector<double>& q, const core::Pose3D& tcp_offset) {
   detail::Rigid acc;
   ForwardPose out;
   out.joints.reserve(axes.size());
@@ -101,9 +114,17 @@ struct ForwardPose final {
     out.joints.push_back(detail::to_pose(acc));
   }
   detail::Rigid tcp;
-  tcp.t = tcp_offset_m;
+  detail::set_rot_from_quat(tcp, tcp_offset.orientation);
+  tcp.t = tcp_offset.position_m;
   out.tcp = detail::to_pose(detail::mul(acc, tcp));
   return out;
+}
+
+// Convenience overload for a position-only TCP offset.
+[[nodiscard]] inline ForwardPose forward_kinematics(
+    const std::vector<AxisSpec>& axes, const std::vector<double>& q,
+    const core::Vec3& tcp_offset_m = {}) {
+  return forward_kinematics(axes, q, core::Pose3D{tcp_offset_m, core::Quaternion::identity()});
 }
 
 }  // namespace cavr::machine

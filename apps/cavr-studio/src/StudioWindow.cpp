@@ -8,7 +8,10 @@
 #include <QQmlContext>
 #include <QQuickWidget>
 #include <QUrl>
+#include <QComboBox>
 #include <QDockWidget>
+#include <QScrollArea>
+#include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QFrame>
 #include <QGroupBox>
@@ -207,8 +210,34 @@ QWidget* StudioWindow::make_calibration_panel() {
 }
 
 QWidget* StudioWindow::make_jog_panel() {
+  constexpr double kDeg5 = 5.0 * 3.14159265358979323846 / 180.0;  // 5° in radians
+
   auto* panel = new QWidget;
   auto* layout = new QVBoxLayout(panel);
+
+  // Coordinate system for Cartesian jog: World / Base / Tool / User.
+  auto* frame_row = new QHBoxLayout;
+  frame_row->addWidget(new QLabel("Frame"));
+  auto* frame = new QComboBox;
+  frame->addItems({"World", "Base", "Tool", "User"});
+  frame->setCurrentIndex(1);  // Base
+  connect(frame, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+          [this](int i) { controller_->setCoordinateSystem(i); });
+  frame_row->addWidget(frame);
+  layout->addLayout(frame_row);
+
+  // Cartesian jog speed, in mm/s.
+  auto* speed_row = new QHBoxLayout;
+  speed_row->addWidget(new QLabel("Speed mm/s"));
+  auto* speed = new QDoubleSpinBox;
+  speed->setRange(1.0, 2000.0);
+  speed->setValue(50.0);
+  connect(speed, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+          [this](double v) { controller_->setSpeedMmS(v); });
+  speed_row->addWidget(speed);
+  layout->addLayout(speed_row);
+
+  layout->addWidget(horizontal_rule());
 
   // Per-axis joint jog: each row is  name  [ - ]  [ + ].
   layout->addWidget(new QLabel("Joint jog (±5°)"));
@@ -227,24 +256,71 @@ QWidget* StudioWindow::make_jog_panel() {
 
   layout->addWidget(horizontal_rule());
 
-  // Cartesian jog: shift the TCP ±5 cm along each base axis (solved via IK).
-  layout->addWidget(new QLabel("Cartesian jog (±5 cm, IK)"));
+  // Cartesian jog in the selected frame: X/Y/Z (±5 cm) and Rx/Ry/Rz (±5°), IK-solved.
+  layout->addWidget(new QLabel("Cartesian jog (±5 cm / ±5°)"));
   const struct {
     const char* label;
-    double dx, dy, dz;
-  } cart[] = {{"X", 0.05, 0, 0}, {"Y", 0, 0.05, 0}, {"Z", 0, 0, 0.05}};
+    double tx, ty, tz, rx, ry, rz;
+  } cart[] = {
+      {"X", 0.05, 0, 0, 0, 0, 0}, {"Y", 0, 0.05, 0, 0, 0, 0},   {"Z", 0, 0, 0.05, 0, 0, 0},
+      {"Rx", 0, 0, 0, kDeg5, 0, 0}, {"Ry", 0, 0, 0, 0, kDeg5, 0}, {"Rz", 0, 0, 0, 0, 0, kDeg5}};
   for (const auto& c : cart) {
     auto* row = new QHBoxLayout;
     row->addWidget(new QLabel(c.label));
     auto* minus = new QPushButton("−");
     auto* plus = new QPushButton("+");
-    const double dx = c.dx, dy = c.dy, dz = c.dz;
-    connect(minus, &QPushButton::clicked, this, [this, dx, dy, dz] { controller_->jogCartesian(-dx, -dy, -dz); });
-    connect(plus, &QPushButton::clicked, this, [this, dx, dy, dz] { controller_->jogCartesian(dx, dy, dz); });
+    const double tx = c.tx, ty = c.ty, tz = c.tz, rx = c.rx, ry = c.ry, rz = c.rz;
+    connect(minus, &QPushButton::clicked, this,
+            [this, tx, ty, tz, rx, ry, rz] { controller_->jogCartesian(-tx, -ty, -tz, -rx, -ry, -rz); });
+    connect(plus, &QPushButton::clicked, this,
+            [this, tx, ty, tz, rx, ry, rz] { controller_->jogCartesian(tx, ty, tz, rx, ry, rz); });
     row->addWidget(minus);
     row->addWidget(plus);
     layout->addLayout(row);
   }
+
+  layout->addWidget(horizontal_rule());
+
+  // Tool table: select a slot (0–9) and calibrate its TCP offset or clear it.
+  layout->addWidget(new QLabel("Tools (10 slots)"));
+  auto* tool_row = new QHBoxLayout;
+  tool_row->addWidget(new QLabel("Slot"));
+  auto* tool = new QComboBox;
+  for (int i = 0; i < 10; ++i) tool->addItem(QString::number(i));
+  connect(tool, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+          [this](int i) { controller_->selectTool(i); });
+  tool_row->addWidget(tool);
+  layout->addLayout(tool_row);
+
+  auto* cal_row = new QHBoxLayout;
+  cal_row->addWidget(new QLabel("TCP"));
+  auto make_tcp_spin = [](double init) {
+    auto* s = new QDoubleSpinBox;
+    s->setRange(-1.0, 1.0);
+    s->setSingleStep(0.01);
+    s->setDecimals(3);
+    s->setValue(init);
+    return s;
+  };
+  auto* tcp_x = make_tcp_spin(0.0);
+  auto* tcp_y = make_tcp_spin(0.0);
+  auto* tcp_z = make_tcp_spin(0.101);
+  cal_row->addWidget(tcp_x);
+  cal_row->addWidget(tcp_y);
+  cal_row->addWidget(tcp_z);
+  layout->addLayout(cal_row);
+
+  auto* tool_btns = new QHBoxLayout;
+  auto* calibrate = new QPushButton("Calibrate");
+  auto* clear_tool = new QPushButton("Clear");
+  connect(calibrate, &QPushButton::clicked, this, [this, tool, tcp_x, tcp_y, tcp_z] {
+    controller_->calibrateTool(tool->currentIndex(), tcp_x->value(), tcp_y->value(), tcp_z->value());
+  });
+  connect(clear_tool, &QPushButton::clicked, this,
+          [this, tool] { controller_->clearTool(tool->currentIndex()); });
+  tool_btns->addWidget(calibrate);
+  tool_btns->addWidget(clear_tool);
+  layout->addLayout(tool_btns);
 
   layout->addWidget(horizontal_rule());
   auto* home = new QPushButton("Jog Home");
@@ -254,7 +330,13 @@ QWidget* StudioWindow::make_jog_panel() {
   layout->addWidget(home);
   layout->addWidget(demo);
   layout->addStretch();
-  return panel;
+
+  // The panel is tall; wrap it so it stays usable in a short dock.
+  auto* scroll = new QScrollArea;
+  scroll->setWidget(panel);
+  scroll->setWidgetResizable(true);
+  scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  return scroll;
 }
 
 QWidget* StudioWindow::make_fault_panel() {
