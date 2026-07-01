@@ -109,6 +109,7 @@ void StudioWindow::create_docks() {
   auto* session = make_dock("1 Session", make_session_panel());
   auto* channels = make_dock("2 Channels", make_channels_panel());
   auto* events = make_dock("3 Events", make_events_panel());
+  auto* jog = make_dock("4 Jog", make_jog_panel());
   auto* camera = make_dock("5 Camera View", new CameraView(this));
   auto* telemetry = make_dock("6 Telemetry", make_telemetry_panel());
   auto* timeline = make_dock("7 Timeline", new TimelineWidget(this));
@@ -118,6 +119,7 @@ void StudioWindow::create_docks() {
   addDockWidget(Qt::LeftDockWidgetArea, session);
   splitDockWidget(session, channels, Qt::Vertical);
   splitDockWidget(channels, events, Qt::Vertical);
+  splitDockWidget(events, jog, Qt::Vertical);
 
   addDockWidget(Qt::RightDockWidgetArea, camera);
   splitDockWidget(camera, telemetry, Qt::Vertical);
@@ -201,6 +203,57 @@ QWidget* StudioWindow::make_calibration_panel() {
   layout->addRow("Hand-Eye", value_label("he_2025_05_10.yaml"));
   layout->addRow("Reprojection Error", value_label("0.42 px"));
   layout->addRow("Status", value_label("Valid"));
+  return panel;
+}
+
+QWidget* StudioWindow::make_jog_panel() {
+  auto* panel = new QWidget;
+  auto* layout = new QVBoxLayout(panel);
+
+  // Per-axis joint jog: each row is  name  [ - ]  [ + ].
+  layout->addWidget(new QLabel("Joint jog (±5°)"));
+  const QStringList axes = {"S", "L", "U", "R", "B", "T"};
+  for (int i = 0; i < axes.size(); ++i) {
+    auto* row = new QHBoxLayout;
+    row->addWidget(new QLabel(axes[i]));
+    auto* minus = new QPushButton("−");
+    auto* plus = new QPushButton("+");
+    connect(minus, &QPushButton::clicked, this, [this, i] { controller_->jogJoint(i, -5.0); });
+    connect(plus, &QPushButton::clicked, this, [this, i] { controller_->jogJoint(i, 5.0); });
+    row->addWidget(minus);
+    row->addWidget(plus);
+    layout->addLayout(row);
+  }
+
+  layout->addWidget(horizontal_rule());
+
+  // Cartesian jog: shift the TCP ±5 cm along each base axis (solved via IK).
+  layout->addWidget(new QLabel("Cartesian jog (±5 cm, IK)"));
+  const struct {
+    const char* label;
+    double dx, dy, dz;
+  } cart[] = {{"X", 0.05, 0, 0}, {"Y", 0, 0.05, 0}, {"Z", 0, 0, 0.05}};
+  for (const auto& c : cart) {
+    auto* row = new QHBoxLayout;
+    row->addWidget(new QLabel(c.label));
+    auto* minus = new QPushButton("−");
+    auto* plus = new QPushButton("+");
+    const double dx = c.dx, dy = c.dy, dz = c.dz;
+    connect(minus, &QPushButton::clicked, this, [this, dx, dy, dz] { controller_->jogCartesian(-dx, -dy, -dz); });
+    connect(plus, &QPushButton::clicked, this, [this, dx, dy, dz] { controller_->jogCartesian(dx, dy, dz); });
+    row->addWidget(minus);
+    row->addWidget(plus);
+    layout->addLayout(row);
+  }
+
+  layout->addWidget(horizontal_rule());
+  auto* home = new QPushButton("Jog Home");
+  auto* demo = new QPushButton("Run Demo");
+  connect(home, &QPushButton::clicked, this, [this] { controller_->jogHome(); });
+  connect(demo, &QPushButton::clicked, this, [this] { controller_->runDemo(); });
+  layout->addWidget(home);
+  layout->addWidget(demo);
+  layout->addStretch();
   return panel;
 }
 

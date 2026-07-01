@@ -7,6 +7,7 @@
 // events). poll(now) advances the precomputed trajectory by wall-clock time.
 
 #include <cavr/adapter_sdk/controller_adapter.hpp>
+#include <cavr/machine/ik.hpp>
 #include <cavr/machine/kinematics.hpp>
 #include <cavr/machine/machine_profile.hpp>
 
@@ -136,14 +137,26 @@ class MockController final : public sdk::ControllerAdapter {
   void resume() override { if (started_) { paused_ = false; state_ = machine::ProgramState::Running; } }
   void stop() override { started_ = false; paused_ = false; state_ = machine::ProgramState::Aborted; }
 
-  // Immediate joint jog: interrupt whatever is running and move from the current
-  // pose to the commanded joint target (the scene -> robot direction). Cartesian
-  // jog is not modeled by this reference controller.
+  // Immediate jog: interrupt whatever is running and move from the current pose
+  // to the commanded target (the scene -> robot direction). A joint target moves
+  // there directly; a Cartesian (pose) target is solved through inverse
+  // kinematics first, so MoveL-style jogging works too.
   [[nodiscard]] bool move_to(const machine::MotionCommand& command) override {
-    if (!connected_ || !command.target.joints) return false;
+    if (!connected_) return false;
     std::vector<double> start = last_joints_.empty() ? std::vector<double>(dof(), 0.0) : last_joints_;
     start.resize(dof(), 0.0);
-    std::vector<double> target = *command.target.joints;
+
+    std::vector<double> target;
+    if (command.target.joints) {
+      target = *command.target.joints;
+    } else if (command.target.pose) {
+      const machine::IkResult ik =
+          machine::inverse_kinematics(profile_.axes, *command.target.pose, start, core::Vec3{0, 0, 0.101});
+      if (!ik.converged) return false;  // unreachable Cartesian target
+      target = ik.joints;
+    } else {
+      return false;
+    }
     target.resize(dof(), 0.0);
 
     double max_delta = 0.0;

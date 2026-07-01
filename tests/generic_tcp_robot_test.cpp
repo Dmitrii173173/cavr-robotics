@@ -282,6 +282,37 @@ void test_mock_move_to() {
   check(reached, "mock jog reaches the commanded joint target");
 }
 
+// Cartesian jog on the mock: move_to a TCP pose (not joints) is solved through
+// inverse kinematics, and the reached pose matches the commanded target.
+void test_mock_cartesian_move_to() {
+  mock::MockController controller;
+  (void)controller.connect({"mock", "mock"});
+
+  // A reachable pose: take FK of a known joint config as the Cartesian target.
+  const auto profile = mock::make_gp25_profile();
+  const std::vector<double> ref = {0.3, 0.2, -0.2, 0.0, 0.4, 0.0};
+  const cavr::core::Pose3D target =
+      cavr::machine::forward_kinematics(profile.axes, ref, cavr::core::Vec3{0, 0, 0.101}).tcp;
+
+  machine::MotionCommand jog;
+  jog.kind = machine::MotionKind::MoveL;
+  jog.target.pose = target;
+  jog.speed = 3.0;
+  check(controller.move_to(jog), "mock accepts a Cartesian jog (IK converges)");
+
+  sdk::RobotState s;
+  std::int64_t now_ns = 0;
+  for (int i = 0; i < 800; ++i) {
+    s = controller.poll(cavr::core::Timestamp::from_nanoseconds(now_ns));
+    now_ns += 20'000'000;
+  }
+  const double dx = s.tcp_pose.position_m.x_m - target.position_m.x_m;
+  const double dy = s.tcp_pose.position_m.y_m - target.position_m.y_m;
+  const double dz = s.tcp_pose.position_m.z_m - target.position_m.z_m;
+  check(std::sqrt(dx * dx + dy * dy + dz * dz) < 2.0e-3,
+        "mock Cartesian jog reaches the commanded TCP position");
+}
+
 // A bad endpoint fails cleanly rather than hanging or crashing.
 void test_connect_failure() {
   tcp::GenericTcpController controller;
@@ -300,6 +331,7 @@ int main() {
   test_session_manager_integration();
   test_move_to_jog();
   test_mock_move_to();
+  test_mock_cartesian_move_to();
   test_connect_failure();
 
   if (failures != 0) {

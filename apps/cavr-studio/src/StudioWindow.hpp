@@ -30,4 +30,5 @@ class StudioWindow final : public QMainWindow {
   [[nodiscard]] QWidget* make_telemetry_panel();
   [[nodiscard]] QWidget* make_calibration_panel();
   [[nodiscard]] QWidget* make_fault_panel();
+  [[nodiscard]] QWidget* make_jog_panel();
 };

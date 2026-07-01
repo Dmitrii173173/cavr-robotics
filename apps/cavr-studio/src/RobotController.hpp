@@ -46,8 +46,12 @@ class RobotController final : public QObject {
   Q_INVOKABLE void resume();
   Q_INVOKABLE void stop();
   // Live jog from the scene (scene -> robot): command the robot — mock or remote —
-  // to move to its home joint pose right now, interrupting the running program.
+  // to move now, interrupting the running program. Jogging switches the cell into
+  // manual mode so it holds the jogged pose instead of resuming the demo.
   Q_INVOKABLE void jogHome();
+  Q_INVOKABLE void jogJoint(int axis, double delta_deg);   // relative single-axis move
+  Q_INVOKABLE void jogCartesian(double dx_m, double dy_m, double dz_m);  // relative TCP move (IK)
+  Q_INVOKABLE void runDemo();                              // leave manual mode, resume the demo
   Q_INVOKABLE bool saveSession(const QString& path);
 
  signals:
@@ -65,6 +69,7 @@ class RobotController final : public QObject {
   // same either way, so the scene mirrors a real robot with no other changes.
   std::unique_ptr<cavr::adapter_sdk::ControllerAdapter> controller_;
   bool remote_{false};
+  bool manual_{false};  // set by jogging; suppresses the demo auto-restart
   cavr::runtime::SessionManager manager_;
   QTimer timer_;
   std::int64_t now_ns_{1'000'000'000};
