@@ -242,3 +242,22 @@ target_link_libraries(cavr_file_camera_test
 )
 
 add_test(NAME cavr_file_camera_test COMMAND cavr_file_camera_test)
+
+add_executable(cavr_generic_tcp_robot_test
+  generic_tcp_robot_test.cpp
+)
+
+find_package(Threads REQUIRED)
+
+target_link_libraries(cavr_generic_tcp_robot_test
+  PRIVATE
+    CAVR::adapter_generic_tcp_robot
+    CAVR::adapter_mock_robot
+    CAVR::runtime
+    CAVR::machine
+    CAVR::validation
+    CAVR::core
+    Threads::Threads
+)
+
+add_test(NAME cavr_generic_tcp_robot_test COMMAND cavr_generic_tcp_robot_test)

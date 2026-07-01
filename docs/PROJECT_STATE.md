@@ -43,6 +43,7 @@ hand-rolled). Dependency flow is a clean DAG.
 | `libs/machine` | **MachineProfile** (axes, frames, tool/user frames, IO, telemetry channels, cameras, motion vocabulary, weld defaults), `kinematics.hpp` (FK), `json.hpp` + `profile_io.hpp` (import/export). |
 | `libs/adapter_sdk` | **`RobotState`/TelemetryFrame** and the neutral **`ControllerAdapter`** interface (connect, discover_profile, load_task, start/pause/stop, `poll`). |
 | `adapters/mock_robot` | **`MockController`** — deterministic GP25 cell that executes a precomputed joint trajectory and reports real telemetry. The reference adapter implementation. |
+| `adapters/generic_tcp_robot` | **`GenericTcpController`** — a real `ControllerAdapter` over TCP, drop-in for the mock (`connect` a `host:port` instead of `"mock"`). Speaks a newline-delimited JSON protocol (`protocol.hpp`) to a controller bridge/PLC; server-pushed telemetry is drained non-blocking each `poll()`. All platform socket code (Winsock/BSD) is confined to one TU (`tcp_connection.cpp`), which also provides a `TcpListener` for reference servers/tests. |
 | `libs/validation` | **`trajectory_validator`** — joint-limit / speed / frame checks (collisions explicitly "not evaluated"). |
 | `libs/runtime` | **Timeline** (`OperationStep`/`TimelineEvent`), **`SessionManager`** (Scan→Plan→Validate→Execute→Monitor→Replay), `SessionLog` + `session_io` (save/replay), `demo_plan`. Also bridges sessions onto the recording layer: `record_session` (write/read a whole `SessionLog`), `session_recorder` (live, incremental Monitor-phase sink), `camera_recording` (synchronized camera stream), `catalog_index` (recording → catalog row). |
 | `libs/adapter_sdk` (camera) | `CameraFrame`/`CameraAdapter`; `adapters/mock_camera`'s **`MockCamera`** is the synthetic reference implementation, and `adapters/file_camera`'s **`FileCameraAdapter`** replays a real `.pgm`/`.ppm` image sequence from disk (dependency-free Netpbm reader/writer). `SessionManager::attach_camera` polls whichever is attached on the same tick as the robot, so recordings carry synchronized robot + vision. |
@@ -80,8 +81,9 @@ hand-rolled). Dependency flow is a clean DAG.
   **live telemetry** to QML: joint angles drive the robot, the overlay shows
   program state / current step / weld, and controller events stream into the
   Events panel and status bar. **No fake animation** — every frame is telemetry.
-- Swapping `MockController` for a real `ControllerAdapter` (e.g. in
-  `adapters/generic_tcp_robot`) changes nothing else.
+- Swapping `MockController` for a real `ControllerAdapter` changes nothing else
+  — `adapters/generic_tcp_robot`'s `GenericTcpController` is exactly such a
+  drop-in, connecting to a `host:port` over TCP instead of the in-process mock.
 
 ## Build / CI / Releases
 
@@ -90,19 +92,22 @@ hand-rolled). Dependency flow is a clean DAG.
   plus a Qt Studio build on 3 OSes.
 - **Releases** ([`release.yml`](../.github/workflows/release.yml)): push a `v*`
   tag → per-OS bundled archives published to a GitHub Release.
-- Tests (15, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
+- Tests (16, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
   `cavr_visualization_robot_model_test`, `cavr_runtime_workflow_test`
   (profile round-trip, validation, full session, save/replay),
   `cavr_record_recording_test`, `cavr_record_copy_test`,
   `cavr_storage_mcap_recording_test`, `cavr_runtime_session_recording_test`,
   `cavr_runtime_session_recorder_test`, `cavr_runtime_camera_recording_test`,
-  `cavr_catalog_test`, `cavr_runtime_catalog_index_test`, `cavr_file_camera_test`.
+  `cavr_catalog_test`, `cavr_runtime_catalog_index_test`, `cavr_file_camera_test`,
+  `cavr_generic_tcp_robot_test` (a fake robot server over loopback TCP drives the
+  adapter and a full `SessionManager` session).
 
 ## What's next (natural extensions)
 
-- A real `ControllerAdapter` (TCP / vendor SDK) replacing the mock — the
-  `adapters/generic_tcp_robot` and `adapters/robodk` directories are still
-  empty placeholders.
+- A concrete controller bridge speaking the `generic_tcp_robot` protocol (or a
+  vendor-SDK `ControllerAdapter`, e.g. `adapters/robodk`, still an empty
+  placeholder). `GenericTcpController` is done and validated against a fake
+  server; what remains is a real robot/PLC on the other end.
 - A real image-decoding `CameraAdapter` (`adapters/opencv_camera` — currently
   an empty placeholder) or a live capture device. `adapters/file_camera`'s
   `FileCameraAdapter` already replays a real (Netpbm) image sequence from disk
