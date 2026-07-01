@@ -213,3 +213,15 @@ if(CAVR_ENABLE_SQLITE)
 endif()
 
 add_test(NAME cavr_runtime_catalog_index_test COMMAND cavr_runtime_catalog_index_test)
+
+add_executable(cavr_file_camera_test
+  file_camera_test.cpp
+)
+
+target_link_libraries(cavr_file_camera_test
+  PRIVATE
+    CAVR::adapter_file_camera
+    CAVR::core
+)
+
+add_test(NAME cavr_file_camera_test COMMAND cavr_file_camera_test)

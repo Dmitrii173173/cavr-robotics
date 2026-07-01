@@ -6,6 +6,8 @@
 // This is the first end-to-end exercise of the record -> storage -> catalog
 // backend from the command line, rather than only from unit tests.
 
+#include <cavr/adapter_sdk/camera_adapter.hpp>
+#include <cavr/adapters/file_camera/file_camera_adapter.hpp>
 #include <cavr/adapters/mock_camera/mock_camera.hpp>
 #include <cavr/adapters/mock_robot/mock_controller.hpp>
 #include <cavr/catalog/in_memory_catalog.hpp>
@@ -36,6 +38,7 @@ namespace record = cavr::record;
 namespace catalog = cavr::catalog;
 namespace mock_robot = cavr::adapters::mock_robot;
 namespace mock_camera = cavr::adapters::mock_camera;
+namespace file_camera = cavr::adapters::file_camera;
 
 constexpr std::int64_t kTickNs = 20'000'000;  // 50 Hz simulated clock, matches the Studio demo
 
@@ -43,6 +46,8 @@ struct Options {
   std::filesystem::path out;
   std::string session_id;
   std::string catalog_path;
+  std::string frames_dir;
+  double fps{30.0};
   int max_ticks{5000};
 };
 
@@ -63,8 +68,8 @@ struct Options {
 void print_usage() {
   std::cout <<
       "Usage: cavr-record [--out <path>] [--session-id <id>] [--catalog <path>] "
-      "[--ticks <n>]\n\n"
-      "Records the demo GP25 welding workflow (mock robot + mock camera) as a\n"
+      "[--frames-dir <dir>] [--fps <n>] [--ticks <n>]\n\n"
+      "Records the demo GP25 welding workflow (mock robot + camera) as a\n"
       "synchronized robot + vision session.\n\n"
       "  --out <path>        Recording file to write. Extension selects the backend:\n"
       "                      .mcap (MCAP) or .json (reference backend). Default: "
@@ -72,6 +77,10 @@ void print_usage() {
       "  --session-id <id>   Session identifier. Default: a timestamped id.\n"
       "  --catalog <path>    Also index the finished recording into a catalog at\n"
       "                      this path (SQLite when built, else in-memory only).\n"
+      "  --frames-dir <dir>  Replay .pgm/.ppm image files from this directory as the\n"
+      "                      camera stream (FileCameraAdapter) instead of the\n"
+      "                      synthetic MockCamera pattern.\n"
+      "  --fps <n>           Playback rate for --frames-dir. Default: 30.\n"
       "  --ticks <n>         Safety cap on simulated ticks. Default: 5000.\n";
 }
 
@@ -99,6 +108,10 @@ int parse_args(int argc, char** argv, Options& opts) {
       opts.session_id = next();
     } else if (arg == "--catalog") {
       opts.catalog_path = next();
+    } else if (arg == "--frames-dir") {
+      opts.frames_dir = next();
+    } else if (arg == "--fps") {
+      opts.fps = std::stod(next());
     } else if (arg == "--ticks") {
       opts.max_ticks = std::stoi(next());
     } else {
@@ -146,11 +159,23 @@ int main(int argc, char** argv) {
   }
 
   mock_robot::MockController controller;
-  mock_camera::MockCamera camera(8, 8, "weld_cam");
+
+  std::unique_ptr<cavr::adapter_sdk::CameraAdapter> camera;
+  if (opts.frames_dir.empty()) {
+    camera = std::make_unique<mock_camera::MockCamera>(8, 8, "weld_cam");
+  } else {
+    auto file_cam = std::make_unique<file_camera::FileCameraAdapter>(
+        file_camera::FileCameraAdapter::from_directory(opts.frames_dir, "file_cam", opts.fps));
+    if (file_cam->frame_count() == 0) {
+      std::cerr << "warning: no .pgm/.ppm files found under " << opts.frames_dir << '\n';
+    }
+    camera = std::move(file_cam);
+  }
+
   runtime::SessionManager manager;
   runtime::SessionRecorder recorder(*writer);
   manager.attach_recorder(recorder);
-  manager.attach_camera(camera);
+  manager.attach_camera(*camera);
 
   static_cast<void>(manager.connect(controller, {"mock", "mock"}));
   static_cast<void>(manager.discover_profile());

@@ -7,6 +7,7 @@ target_link_libraries(cavr-record
     CAVR::catalog
     CAVR::adapter_mock_robot
     CAVR::adapter_mock_camera
+    CAVR::adapter_file_camera
     CAVR::machine
     CAVR::validation
     CAVR::core
