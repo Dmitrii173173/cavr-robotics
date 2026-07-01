@@ -90,6 +90,23 @@ target_link_libraries(cavr_record_recording_test
 
 add_test(NAME cavr_record_recording_test COMMAND cavr_record_recording_test)
 
+add_executable(cavr_record_copy_test
+  record_copy_test.cpp
+)
+
+target_link_libraries(cavr_record_copy_test
+  PRIVATE
+    CAVR::record
+    CAVR::core
+)
+
+if(CAVR_ENABLE_MCAP)
+  target_link_libraries(cavr_record_copy_test PRIVATE CAVR::storage_mcap)
+  target_compile_definitions(cavr_record_copy_test PRIVATE CAVR_WITH_MCAP)
+endif()
+
+add_test(NAME cavr_record_copy_test COMMAND cavr_record_copy_test)
+
 if(CAVR_ENABLE_MCAP)
   add_executable(cavr_storage_mcap_recording_test
     storage_mcap_recording_test.cpp

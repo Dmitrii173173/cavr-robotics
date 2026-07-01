@@ -46,7 +46,7 @@ hand-rolled). Dependency flow is a clean DAG.
 | `libs/validation` | **`trajectory_validator`** — joint-limit / speed / frame checks (collisions explicitly "not evaluated"). |
 | `libs/runtime` | **Timeline** (`OperationStep`/`TimelineEvent`), **`SessionManager`** (Scan→Plan→Validate→Execute→Monitor→Replay), `SessionLog` + `session_io` (save/replay), `demo_plan`. Also bridges sessions onto the recording layer: `record_session` (write/read a whole `SessionLog`), `session_recorder` (live, incremental Monitor-phase sink), `camera_recording` (synchronized camera stream), `catalog_index` (recording → catalog row). |
 | `libs/adapter_sdk` (camera) | `CameraFrame`/`CameraAdapter`; `adapters/mock_camera`'s **`MockCamera`** is the synthetic reference implementation, and `adapters/file_camera`'s **`FileCameraAdapter`** replays a real `.pgm`/`.ppm` image sequence from disk (dependency-free Netpbm reader/writer). `SessionManager::attach_camera` polls whichever is attached on the same tick as the robot, so recordings carry synchronized robot + vision. |
-| `libs/record` | Storage-neutral recording model (`Channel`/`Message`, `RecordingWriter`/`RecordingReader`) plus the dependency-free JSON reference backend. |
+| `libs/record` | Storage-neutral recording model (`Channel`/`Message`, `RecordingWriter`/`RecordingReader`) plus the dependency-free JSON reference backend. `copy.hpp`'s `write_recording` replays a whole recording through any writer (remapping channel ids) — the backend-agnostic core of `cavr-convert`. |
 | `libs/storage_mcap` | Authoritative **MCAP** backend (vendored foxglove/mcap, single TU, uncompressed) implementing the same interfaces, with a streaming (unchunked) mode for live recording. Gated by `CAVR_ENABLE_MCAP` (default `ON`); with it off the JSON backend is the only option and the tree stays dependency-free. |
 | `libs/catalog` | Local session catalog — reconstructible metadata only (id, path, span, robot/camera model, file size/hash, tags, annotations, bookmarks, validation summaries); heavy data stays in the recording. Engine-neutral `Catalog` interface, `InMemoryCatalog` reference impl, `SqliteCatalog` (vendored amalgamation, PIMPL) gated by `CAVR_ENABLE_SQLITE` (default `ON`). |
 | `libs/visualization` | `RobotModel` + FK + render-side scene data. |
@@ -62,8 +62,14 @@ hand-rolled). Dependency flow is a clean DAG.
 - **`cavr-inspect`** — dumps a recording's channels, message counts, session
   header and camera stream through the neutral `RecordingReader`; works on
   `.mcap` and `.json` alike.
-- `cavr-convert`, `cavr-validate` — still placeholders (CMake target only, no
-  implementation yet).
+- **`cavr-convert`** — converts a recording between backends (`.mcap` ↔ `.json`)
+  by loading it into the neutral `record::Recording` and writing it back through
+  the other backend; the message stream is preserved exactly and channel ids are
+  remapped. Built on `record/copy.hpp`'s `write_recording`.
+- **`cavr-validate`** — runs the pre-execution trajectory validation of the
+  reference welding plan against a machine profile (built-in GP25, or one loaded
+  from JSON), the same check the Studio Validate phase performs; exits non-zero
+  on errors, linter-style.
 
 ## CAVR Studio (Qt 6 / Quick3D)
 
@@ -84,13 +90,13 @@ hand-rolled). Dependency flow is a clean DAG.
   plus a Qt Studio build on 3 OSes.
 - **Releases** ([`release.yml`](../.github/workflows/release.yml)): push a `v*`
   tag → per-OS bundled archives published to a GitHub Release.
-- Tests (14, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
+- Tests (15, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
   `cavr_visualization_robot_model_test`, `cavr_runtime_workflow_test`
   (profile round-trip, validation, full session, save/replay),
-  `cavr_record_recording_test`, `cavr_storage_mcap_recording_test`,
-  `cavr_runtime_session_recording_test`, `cavr_runtime_session_recorder_test`,
-  `cavr_runtime_camera_recording_test`, `cavr_catalog_test`,
-  `cavr_runtime_catalog_index_test`, `cavr_file_camera_test`.
+  `cavr_record_recording_test`, `cavr_record_copy_test`,
+  `cavr_storage_mcap_recording_test`, `cavr_runtime_session_recording_test`,
+  `cavr_runtime_session_recorder_test`, `cavr_runtime_camera_recording_test`,
+  `cavr_catalog_test`, `cavr_runtime_catalog_index_test`, `cavr_file_camera_test`.
 
 ## What's next (natural extensions)
 
@@ -102,7 +108,6 @@ hand-rolled). Dependency flow is a clean DAG.
   `FileCameraAdapter` already replays a real (Netpbm) image sequence from disk
   and is wired into `cavr-record --frames-dir`, but that is dependency-free
   disk replay, not decoding PNG/JPEG or a live camera.
-- `cavr-convert` / `cavr-validate` CLIs (currently empty placeholders).
 - Camera/point-cloud ingestion + hand-eye into the scan step.
 - Bind the remaining Studio panels (Telemetry, Calibration) to the data model.
 - Interactive timeline editing + replay scrubbing from a saved `SessionLog`.
