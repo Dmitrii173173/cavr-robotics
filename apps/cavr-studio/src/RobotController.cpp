@@ -4,6 +4,7 @@
 #include <cavr/runtime/session_io.hpp>
 
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <vector>
 
@@ -13,8 +14,20 @@ constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
 }  // namespace
 
 RobotController::RobotController(QObject* parent) : QObject(parent) {
+  // Pick the robot source. CAVR_ROBOT_ENDPOINT=host:port drives the scene from a
+  // remote robot over TCP (a cavr-robotd or a vendor bridge) — the robot -> scene
+  // digital-twin path; otherwise the in-process mock keeps the standalone demo.
+  cavr::adapter_sdk::ConnectionInfo info{"mock", "mock"};
+  if (const char* endpoint = std::getenv("CAVR_ROBOT_ENDPOINT"); endpoint && *endpoint) {
+    controller_ = std::make_unique<cavr::adapters::generic_tcp_robot::GenericTcpController>();
+    remote_ = true;
+    info = {endpoint, "tcp"};
+  } else {
+    controller_ = std::make_unique<cavr::adapters::mock_robot::MockController>();
+  }
+
   // connect -> discover profile -> plan -> validate -> execute
-  static_cast<void>(manager_.connect(controller_, {"mock", "mock"}));
+  static_cast<void>(manager_.connect(*controller_, info));
   static_cast<void>(manager_.discover_profile());
   manager_.set_plan(cavr::runtime::make_demo_plan());
   static_cast<void>(manager_.validate());
@@ -33,8 +46,10 @@ void RobotController::tick() {
     emit eventLogged(QString::fromStdString(cavr::machine::to_string(e.kind) + " | " + e.message));
   }
 
-  // loop the demo so the cell keeps running, like a repeating production cycle
-  if (manager_.phase() == cavr::runtime::SessionPhase::Completed) {
+  // For the in-process mock, loop the demo so the cell keeps running like a
+  // repeating production cycle. A remote robot drives its own motion (cavr-robotd
+  // loops continuously), so we just keep mirroring its telemetry.
+  if (!remote_ && manager_.phase() == cavr::runtime::SessionPhase::Completed) {
     ++run_index_;
     manager_.set_plan(cavr::runtime::make_demo_plan());
     static_cast<void>(manager_.validate());
@@ -72,8 +87,8 @@ void RobotController::start() {
   static_cast<void>(manager_.execute("studio_session_" + std::to_string(++run_index_)));
   publish();
 }
-void RobotController::pause() { controller_.pause(); }
-void RobotController::resume() { controller_.resume(); }
+void RobotController::pause() { controller_->pause(); }
+void RobotController::resume() { controller_->resume(); }
 void RobotController::stop() {
   manager_.stop();
   publish();

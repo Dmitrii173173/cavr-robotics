@@ -7,7 +7,9 @@
 // backend from the command line, rather than only from unit tests.
 
 #include <cavr/adapter_sdk/camera_adapter.hpp>
+#include <cavr/adapter_sdk/controller_adapter.hpp>
 #include <cavr/adapters/file_camera/file_camera_adapter.hpp>
+#include <cavr/adapters/generic_tcp_robot/generic_tcp_controller.hpp>
 #include <cavr/adapters/mock_camera/mock_camera.hpp>
 #include <cavr/adapters/mock_robot/mock_controller.hpp>
 #include <cavr/catalog/in_memory_catalog.hpp>
@@ -30,6 +32,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -39,6 +42,7 @@ namespace catalog = cavr::catalog;
 namespace mock_robot = cavr::adapters::mock_robot;
 namespace mock_camera = cavr::adapters::mock_camera;
 namespace file_camera = cavr::adapters::file_camera;
+namespace tcp_robot = cavr::adapters::generic_tcp_robot;
 
 constexpr std::int64_t kTickNs = 20'000'000;  // 50 Hz simulated clock, matches the Studio demo
 
@@ -47,7 +51,9 @@ struct Options {
   std::string session_id;
   std::string catalog_path;
   std::string frames_dir;
+  std::string tcp_endpoint;  // record from a remote robot (cavr-robotd) instead of the mock
   double fps{30.0};
+  double seconds{8.0};       // wall-clock capture length in --tcp mode
   int max_ticks{5000};
 };
 
@@ -81,7 +87,11 @@ void print_usage() {
       "                      camera stream (FileCameraAdapter) instead of the\n"
       "                      synthetic MockCamera pattern.\n"
       "  --fps <n>           Playback rate for --frames-dir. Default: 30.\n"
-      "  --ticks <n>         Safety cap on simulated ticks. Default: 5000.\n";
+      "  --tcp <host:port>   Record from a remote robot over TCP (a cavr-robotd or a\n"
+      "                      vendor bridge speaking the generic_tcp_robot protocol)\n"
+      "                      instead of the in-process mock robot.\n"
+      "  --seconds <n>       Wall-clock capture length in --tcp mode. Default: 8.\n"
+      "  --ticks <n>         Safety cap on simulated ticks (mock mode). Default: 5000.\n";
 }
 
 // Returns std::nullopt-like failure via non-zero optional exit code, or -1 to continue.
@@ -112,6 +122,10 @@ int parse_args(int argc, char** argv, Options& opts) {
       opts.frames_dir = next();
     } else if (arg == "--fps") {
       opts.fps = std::stod(next());
+    } else if (arg == "--tcp") {
+      opts.tcp_endpoint = next();
+    } else if (arg == "--seconds") {
+      opts.seconds = std::stod(next());
     } else if (arg == "--ticks") {
       opts.max_ticks = std::stoi(next());
     } else {
@@ -158,7 +172,16 @@ int main(int argc, char** argv) {
     writer = std::make_unique<record::JsonRecordingWriter>(opts.out);
   }
 
-  mock_robot::MockController controller;
+  // The robot is either the in-process mock or a remote controller reached over
+  // TCP (a cavr-robotd or a vendor bridge). Everything downstream is identical —
+  // the ControllerAdapter interface is the seam.
+  std::unique_ptr<cavr::adapter_sdk::ControllerAdapter> controller;
+  const bool use_tcp = !opts.tcp_endpoint.empty();
+  if (use_tcp) {
+    controller = std::make_unique<tcp_robot::GenericTcpController>();
+  } else {
+    controller = std::make_unique<mock_robot::MockController>();
+  }
 
   std::unique_ptr<cavr::adapter_sdk::CameraAdapter> camera;
   if (opts.frames_dir.empty()) {
@@ -177,7 +200,14 @@ int main(int argc, char** argv) {
   manager.attach_recorder(recorder);
   manager.attach_camera(*camera);
 
-  static_cast<void>(manager.connect(controller, {"mock", "mock"}));
+  const cavr::adapter_sdk::ConnectionInfo info =
+      use_tcp ? cavr::adapter_sdk::ConnectionInfo{opts.tcp_endpoint, "tcp"}
+              : cavr::adapter_sdk::ConnectionInfo{"mock", "mock"};
+  if (const auto connect_result = manager.connect(*controller, info); !connect_result.ok()) {
+    std::cerr << "error: failed to connect to robot:\n";
+    for (const auto& e : connect_result.errors) std::cerr << "  - " << e << '\n';
+    return 1;
+  }
   static_cast<void>(manager.discover_profile());
   manager.set_plan(runtime::make_demo_plan());
   const auto validation_report = manager.validate();
@@ -194,17 +224,34 @@ int main(int argc, char** argv) {
   }
 
   std::cout << "Recording session '" << opts.session_id << "' to " << opts.out.string() << " ("
-            << (use_mcap ? "mcap" : "json") << ")...\n";
+            << (use_mcap ? "mcap" : "json") << ") from "
+            << (use_tcp ? "remote robot " + opts.tcp_endpoint : std::string("mock robot")) << "...\n";
 
-  std::int64_t now_ns = 1'000'000'000;
-  int ticks = 0;
-  while (manager.phase() == runtime::SessionPhase::Executing && ticks < opts.max_ticks) {
-    manager.tick(cavr::core::Timestamp::from_nanoseconds(now_ns));
-    now_ns += kTickNs;
-    ++ticks;
-  }
-  if (manager.phase() != runtime::SessionPhase::Completed) {
-    std::cerr << "warning: session did not complete within " << opts.max_ticks << " ticks\n";
+  if (use_tcp) {
+    // A remote robot streams telemetry on its own clock and loops indefinitely,
+    // so pace the poll loop to real time and stop after --seconds rather than on
+    // Completed. Frames are stamped with wall-clock so the session clock advances.
+    const auto start = std::chrono::steady_clock::now();
+    const auto deadline = start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                      std::chrono::duration<double>(opts.seconds));
+    while (std::chrono::steady_clock::now() < deadline) {
+      const auto elapsed = std::chrono::steady_clock::now() - start;
+      const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
+      manager.tick(cavr::core::Timestamp::from_nanoseconds(1'000'000'000 + ns));
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    manager.stop();
+  } else {
+    std::int64_t now_ns = 1'000'000'000;
+    int ticks = 0;
+    while (manager.phase() == runtime::SessionPhase::Executing && ticks < opts.max_ticks) {
+      manager.tick(cavr::core::Timestamp::from_nanoseconds(now_ns));
+      now_ns += kTickNs;
+      ++ticks;
+    }
+    if (manager.phase() != runtime::SessionPhase::Completed) {
+      std::cerr << "warning: session did not complete within " << opts.max_ticks << " ticks\n";
+    }
   }
 
   if (const record::RecordStatus status = recorder.finish(manager.log()); !status) {

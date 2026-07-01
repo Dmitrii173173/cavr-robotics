@@ -33,6 +33,7 @@ target_link_libraries(cavr-studio
     CAVR::machine
     CAVR::validation
     CAVR::adapter_mock_robot
+    CAVR::adapter_generic_tcp_robot
 )
 
 target_compile_features(cavr-studio PRIVATE cxx_std_20)

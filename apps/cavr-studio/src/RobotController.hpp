@@ -12,10 +12,13 @@
 #include <QTimer>
 #include <QVariantList>
 
+#include <cavr/adapter_sdk/controller_adapter.hpp>
+#include <cavr/adapters/generic_tcp_robot/generic_tcp_controller.hpp>
 #include <cavr/adapters/mock_robot/mock_controller.hpp>
 #include <cavr/runtime/session_manager.hpp>
 
 #include <cstdint>
+#include <memory>
 
 class RobotController final : public QObject {
   Q_OBJECT
@@ -53,7 +56,12 @@ class RobotController final : public QObject {
   void tick();
   void publish();
 
-  cavr::adapters::mock_robot::MockController controller_;
+  // The robot is either the in-process mock or, when CAVR_ROBOT_ENDPOINT is set,
+  // a remote controller reached over TCP (a cavr-robotd or a vendor bridge). The
+  // ControllerAdapter interface is the only seam — the rest of this class is the
+  // same either way, so the scene mirrors a real robot with no other changes.
+  std::unique_ptr<cavr::adapter_sdk::ControllerAdapter> controller_;
+  bool remote_{false};
   cavr::runtime::SessionManager manager_;
   QTimer timer_;
   std::int64_t now_ns_{1'000'000'000};

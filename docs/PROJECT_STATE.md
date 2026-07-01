@@ -54,12 +54,13 @@ hand-rolled). Dependency flow is a clean DAG.
 
 ## Backend CLIs
 
-- **`cavr-record`** — runs the demo GP25 workflow against `MockController` and
-  either `MockCamera` or, via `--frames-dir`, a real `FileCameraAdapter` image
-  sequence, streaming a live synchronized session to `--out` (`.mcap` or
-  `.json`), and optionally indexes the finished recording into `--catalog`
-  (SQLite when built, else in-memory). First end-to-end exercise of
-  record → storage → catalog from the command line.
+- **`cavr-record`** — runs the demo GP25 workflow against `MockController` (or,
+  via `--tcp host:port`, a remote robot over the network) and either `MockCamera`
+  or, via `--frames-dir`, a real `FileCameraAdapter` image sequence, streaming a
+  live synchronized session to `--out` (`.mcap` or `.json`), and optionally
+  indexes the finished recording into `--catalog` (SQLite when built, else
+  in-memory). First end-to-end exercise of record → storage → catalog from the
+  command line.
 - **`cavr-inspect`** — dumps a recording's channels, message counts, session
   header and camera stream through the neutral `RecordingReader`; works on
   `.mcap` and `.json` alike.
@@ -71,6 +72,13 @@ hand-rolled). Dependency flow is a clean DAG.
   reference welding plan against a machine profile (built-in GP25, or one loaded
   from JSON), the same check the Studio Validate phase performs; exits non-zero
   on errors, linter-style.
+- **`cavr-robotd`** — a **reference robot server**: speaks the `generic_tcp_robot`
+  protocol over TCP, backed by the mock GP25, continuously looping the demo
+  trajectory. Stands in for a per-vendor bridge so the whole channel (discover →
+  load → live telemetry) runs end to end on any platform. `cavr-record --tcp
+  host:port` records from it; `CAVR_ROBOT_ENDPOINT=host:port ./cavr-studio` makes
+  the virtual GP25 mirror it live — the **robot → scene digital twin** (verified:
+  the scene tracks the remote robot and freezes when it stops streaming).
 
 ## CAVR Studio (Qt 6 / Quick3D)
 
@@ -84,6 +92,9 @@ hand-rolled). Dependency flow is a clean DAG.
 - Swapping `MockController` for a real `ControllerAdapter` changes nothing else
   — `adapters/generic_tcp_robot`'s `GenericTcpController` is exactly such a
   drop-in, connecting to a `host:port` over TCP instead of the in-process mock.
+  Set **`CAVR_ROBOT_ENDPOINT=host:port`** to drive the scene from a remote robot
+  (e.g. `cavr-robotd`) — the virtual GP25 then mirrors the real robot's live
+  motion (robot → scene digital twin). Unset, it runs the standalone mock demo.
 
 ## Build / CI / Releases
 

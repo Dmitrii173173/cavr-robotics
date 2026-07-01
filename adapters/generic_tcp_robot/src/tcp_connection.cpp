@@ -82,17 +82,22 @@ void suppress_sigpipe(std::intptr_t s) {
 }
 
 // Waits until `s` is readable (want_write=false) or writable (want_write=true),
-// up to timeout_ms. Returns 1 ready, 0 timeout, -1 error.
+// up to timeout_ms (a negative timeout blocks indefinitely). Returns 1 ready,
+// 0 timeout, -1 error.
 int wait_ready(std::intptr_t s, bool want_write, int timeout_ms) {
   fd_set set;
   FD_ZERO(&set);
   FD_SET(static_cast<int>(s), &set);
   timeval tv;
-  tv.tv_sec = timeout_ms / 1000;
-  tv.tv_usec = (timeout_ms % 1000) * 1000;
+  timeval* ptv = nullptr;  // null blocks indefinitely
+  if (timeout_ms >= 0) {
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    ptv = &tv;
+  }
   const int nfds = static_cast<int>(s) + 1;
-  if (want_write) return ::select(nfds, nullptr, &set, nullptr, &tv);
-  return ::select(nfds, &set, nullptr, nullptr, &tv);
+  if (want_write) return ::select(nfds, nullptr, &set, nullptr, ptv);
+  return ::select(nfds, &set, nullptr, nullptr, ptv);
 }
 
 // Moves every complete '\n'-terminated line out of `buffer` into `out`.

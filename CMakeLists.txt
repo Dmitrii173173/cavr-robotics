@@ -47,6 +47,7 @@ if(CAVR_BUILD_APPS)
   add_subdirectory(apps/cavr-inspect)
   add_subdirectory(apps/cavr-validate)
   add_subdirectory(apps/cavr-convert)
+  add_subdirectory(apps/cavr-robotd)
 endif()
 
 if(CAVR_BUILD_TESTS)
