@@ -76,7 +76,7 @@ void stream_until_stopped(tcp::TcpConnection& conn, mock::MockController& contro
     }
     send_state(conn, s);
 
-    // Drain any client commands that arrived (stop/pause) without blocking.
+    // Drain any client commands that arrived (stop/pause/move_to) without blocking.
     std::vector<std::string> lines;
     if (!conn.drain_lines(lines)) break;  // client disconnected
     for (const auto& line : lines) {
@@ -87,6 +87,11 @@ void stream_until_stopped(tcp::TcpConnection& conn, mock::MockController& contro
       if (cmd == "stop") {
         send_ack(conn, "stop");
         running = false;
+      } else if (cmd == "move_to") {
+        // Live jog from the client (scene -> robot): interrupt the demo and move
+        // to the commanded target; telemetry then reflects the new motion.
+        (void)controller.move_to(proto::command_from_json(value->at("command")));
+        send_ack(conn, "move_to");
       } else if (cmd == "pause" || cmd == "resume") {
         send_ack(conn, cmd);  // acknowledged; the demo stream keeps flowing
       }

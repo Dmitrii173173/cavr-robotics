@@ -41,7 +41,7 @@ hand-rolled). Dependency flow is a clean DAG.
 |---------|------|
 | `libs/core` | `Vec3`, `Quaternion`, `Pose3D`, `Timestamp`/`Duration`. |
 | `libs/machine` | **MachineProfile** (axes, frames, tool/user frames, IO, telemetry channels, cameras, motion vocabulary, weld defaults), `kinematics.hpp` (FK), `json.hpp` + `profile_io.hpp` (import/export). |
-| `libs/adapter_sdk` | **`RobotState`/TelemetryFrame** and the neutral **`ControllerAdapter`** interface (connect, discover_profile, load_task, start/pause/stop, `poll`). |
+| `libs/adapter_sdk` | **`RobotState`/TelemetryFrame** and the neutral **`ControllerAdapter`** interface (connect, discover_profile, load_task, start/pause/stop, `poll`, plus `move_to` for an immediate jog — the scene → robot direction). |
 | `adapters/mock_robot` | **`MockController`** — deterministic GP25 cell that executes a precomputed joint trajectory and reports real telemetry. The reference adapter implementation. |
 | `adapters/generic_tcp_robot` | **`GenericTcpController`** — a real `ControllerAdapter` over TCP, drop-in for the mock (`connect` a `host:port` instead of `"mock"`). Speaks a newline-delimited JSON protocol (`protocol.hpp`) to a controller bridge/PLC; server-pushed telemetry is drained non-blocking each `poll()`. All platform socket code (Winsock/BSD) is confined to one TU (`tcp_connection.cpp`), which also provides a `TcpListener` for reference servers/tests. |
 | `libs/validation` | **`trajectory_validator`** — joint-limit / speed / frame checks (collisions explicitly "not evaluated"). |
@@ -95,6 +95,11 @@ hand-rolled). Dependency flow is a clean DAG.
   Set **`CAVR_ROBOT_ENDPOINT=host:port`** to drive the scene from a remote robot
   (e.g. `cavr-robotd`) — the virtual GP25 then mirrors the real robot's live
   motion (robot → scene digital twin). Unset, it runs the standalone mock demo.
+- The **Jog Home** toolbar button commands the robot (mock or remote) to move to
+  its home pose right now via `ControllerAdapter::move_to` — the **scene → robot**
+  direction. With both wired, CAVR Studio is a bidirectional twin: it mirrors the
+  robot's motion and can command it (verified: clicking Jog Home injects a
+  `jog home` step into the live telemetry and moves the robot).
 
 ## Build / CI / Releases
 
@@ -111,7 +116,8 @@ hand-rolled). Dependency flow is a clean DAG.
   `cavr_runtime_session_recorder_test`, `cavr_runtime_camera_recording_test`,
   `cavr_catalog_test`, `cavr_runtime_catalog_index_test`, `cavr_file_camera_test`,
   `cavr_generic_tcp_robot_test` (a fake robot server over loopback TCP drives the
-  adapter and a full `SessionManager` session).
+  adapter and a full `SessionManager` session, plus a scene → robot `move_to` jog
+  end to end and the mock's own live jog).
 
 ## What's next (natural extensions)
 

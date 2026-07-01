@@ -34,6 +34,7 @@ void check(bool condition, std::string_view message) {
 
 namespace tcp = cavr::adapters::generic_tcp_robot;
 namespace proto = cavr::adapters::generic_tcp_robot::protocol;
+namespace mock = cavr::adapters::mock_robot;
 namespace json = cavr::json;
 namespace machine = cavr::machine;
 namespace sdk = cavr::adapter_sdk;
@@ -115,6 +116,20 @@ class FakeRobotServer {
       } else if (cmd == "start") {
         ack(conn, "start");
         stream_frames(conn);
+      } else if (cmd == "move_to") {
+        // Apply the jog: acknowledge, then stream one state frame carrying the
+        // commanded joints, so the client sees the robot reach the target.
+        const machine::MotionCommand jog = proto::command_from_json(value->at("command"));
+        ack(conn, "move_to");
+        cavr::adapter_sdk::RobotState s;
+        s.timestamp = cavr::core::Timestamp::from_nanoseconds(0);
+        if (jog.target.joints) s.joint_positions = *jog.target.joints;
+        s.program_state = machine::ProgramState::Running;
+        s.servo_state = machine::ServoState::On;
+        s.current_step_label = jog.label;
+        json::Value msg = proto::state_to_json(s);
+        msg.set("type", "state");
+        (void)conn.send_line(msg.dump(0));
       } else if (cmd == "stop") {
         ack(conn, "stop");
         running = false;
@@ -204,6 +219,69 @@ void test_session_manager_integration() {
   server.join();
 }
 
+// Scene -> robot: an immediate jog command travels to the controller and the
+// telemetry reflects the commanded joint target.
+void test_move_to_jog() {
+  FakeRobotServer server;
+  check(server.start(/*frames=*/5).empty(), "fake server (jog) starts");
+
+  tcp::GenericTcpController controller;
+  check(controller.connect({endpoint(server.port()), "tcp"}).ok(), "controller connects for jog");
+
+  machine::MotionCommand jog;
+  jog.kind = machine::MotionKind::MoveJ;
+  const std::vector<double> target = {0.11, 0.22, -0.33, 0.44, 0.55, -0.66};
+  jog.target.joints = target;
+  jog.label = "jog target";
+  check(controller.move_to(jog), "move_to is acknowledged");
+
+  // Poll until the telemetry carries the commanded joints (the server echoes them).
+  bool reached = false;
+  std::int64_t now_ns = 0;
+  for (int i = 0; i < 200 && !reached; ++i) {
+    const sdk::RobotState s = controller.poll(cavr::core::Timestamp::from_nanoseconds(now_ns));
+    now_ns += 20'000'000;
+    if (s.joint_positions.size() == target.size()) {
+      bool match = true;
+      for (std::size_t j = 0; j < target.size(); ++j) {
+        if (std::abs(s.joint_positions[j] - target[j]) > 1e-6) match = false;
+      }
+      reached = match;
+    }
+    if (!reached) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  check(reached, "robot telemetry reaches the jogged joint target");
+
+  controller.stop();
+  server.join();
+}
+
+// The mock controller's own live jog: from home, move_to interpolates to the
+// commanded joints and poll() eventually reports them.
+void test_mock_move_to() {
+  mock::MockController controller;
+  (void)controller.connect({"mock", "mock"});
+
+  machine::MotionCommand jog;
+  jog.kind = machine::MotionKind::MoveJ;
+  const std::vector<double> target = {0.2, -0.1, 0.15, 0.0, 0.3, 0.0};
+  jog.target.joints = target;
+  jog.speed = 3.0;  // rad/s
+  check(controller.move_to(jog), "mock accepts the jog");
+
+  sdk::RobotState s;
+  std::int64_t now_ns = 0;
+  for (int i = 0; i < 500; ++i) {
+    s = controller.poll(cavr::core::Timestamp::from_nanoseconds(now_ns));
+    now_ns += 20'000'000;
+  }
+  bool reached = s.joint_positions.size() == target.size();
+  for (std::size_t j = 0; reached && j < target.size(); ++j) {
+    if (std::abs(s.joint_positions[j] - target[j]) > 1e-3) reached = false;
+  }
+  check(reached, "mock jog reaches the commanded joint target");
+}
+
 // A bad endpoint fails cleanly rather than hanging or crashing.
 void test_connect_failure() {
   tcp::GenericTcpController controller;
@@ -220,6 +298,8 @@ void test_connect_failure() {
 int main() {
   test_direct_protocol();
   test_session_manager_integration();
+  test_move_to_jog();
+  test_mock_move_to();
   test_connect_failure();
 
   if (failures != 0) {

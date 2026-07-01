@@ -91,6 +91,11 @@ void StudioWindow::configure_chrome() {
   toolbar->addAction("Validate");
   toolbar->addAction("Inspect");
   toolbar->addSeparator();
+  // Live jog (scene -> robot): commands the robot — in-process mock or, with
+  // CAVR_ROBOT_ENDPOINT set, a remote one — to move home right now.
+  auto* jog = toolbar->addAction("Jog Home");
+  connect(jog, &QAction::triggered, this, [this] { controller_->jogHome(); });
+  toolbar->addSeparator();
   toolbar->addWidget(new QLabel("weld_scan_2025_05_10.mcap"));
 
   status_phase_ = new QLabel("Phase: starting");

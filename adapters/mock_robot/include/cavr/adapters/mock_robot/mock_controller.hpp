@@ -136,6 +136,36 @@ class MockController final : public sdk::ControllerAdapter {
   void resume() override { if (started_) { paused_ = false; state_ = machine::ProgramState::Running; } }
   void stop() override { started_ = false; paused_ = false; state_ = machine::ProgramState::Aborted; }
 
+  // Immediate joint jog: interrupt whatever is running and move from the current
+  // pose to the commanded joint target (the scene -> robot direction). Cartesian
+  // jog is not modeled by this reference controller.
+  [[nodiscard]] bool move_to(const machine::MotionCommand& command) override {
+    if (!connected_ || !command.target.joints) return false;
+    std::vector<double> start = last_joints_.empty() ? std::vector<double>(dof(), 0.0) : last_joints_;
+    start.resize(dof(), 0.0);
+    std::vector<double> target = *command.target.joints;
+    target.resize(dof(), 0.0);
+
+    double max_delta = 0.0;
+    for (std::size_t i = 0; i < dof(); ++i) max_delta = std::max(max_delta, std::abs(target[i] - start[i]));
+    const double speed = command.speed > 0 ? command.speed : deg(60);
+    const double dur = std::max(0.1, max_delta / speed);
+
+    task_ = {command};
+    waypoints_ = {std::move(start), std::move(target)};
+    durations_ = {dur};
+    weld_active_ = {0};
+    starts_ = {0.0, dur};
+    total_s_ = dur;
+    state_ = machine::ProgramState::Running;
+    started_ = true;
+    paused_ = false;
+    started_clock_ = false;
+    last_step_ = -1;
+    completed_emitted_ = false;
+    return true;
+  }
+
   [[nodiscard]] sdk::RobotState poll(core::Timestamp now) override {
     sdk::RobotState s;
     s.timestamp = now;
@@ -281,6 +311,8 @@ class MockController final : public sdk::ControllerAdapter {
     s.has_camera_frame = scanning;
     s.has_point_cloud = scanning;
     if (scanning) { s.camera_frame_id = "cam0"; s.point_cloud_id = "scan0"; }
+
+    last_joints_ = s.joint_positions;  // remembered so a jog starts from the current pose
   }
 
   sdk::ConnectionInfo info_;
@@ -293,6 +325,7 @@ class MockController final : public sdk::ControllerAdapter {
   std::vector<double> starts_;
   std::vector<char> weld_active_;
   double total_s_{0.0};
+  mutable std::vector<double> last_joints_;  // last reported pose, so a jog starts from it
 
   bool connected_{false};
   bool started_{false};

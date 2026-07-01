@@ -89,6 +89,17 @@ void RobotController::start() {
 }
 void RobotController::pause() { controller_->pause(); }
 void RobotController::resume() { controller_->resume(); }
+
+void RobotController::jogHome() {
+  cavr::machine::MotionCommand cmd;
+  cmd.kind = cavr::machine::MotionKind::MoveJ;
+  const std::size_t dof = manager_.profile().axes.size();
+  cmd.target.joints = std::vector<double>(dof > 0 ? dof : 6, 0.0);  // all axes to home
+  cmd.speed = 45.0 * 3.14159265358979323846 / 180.0;                // 45 deg/s
+  cmd.label = "jog home";
+  static_cast<void>(controller_->move_to(cmd));
+  publish();
+}
 void RobotController::stop() {
   manager_.stop();
   publish();

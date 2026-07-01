@@ -92,6 +92,14 @@ class GenericTcpController final : public sdk::ControllerAdapter {
     started_ = false;
   }
 
+  // Immediate move: send a single motion command for the controller to run now
+  // (jog / teleoperation from the scene). Returns whether it was acknowledged.
+  [[nodiscard]] bool move_to(const machine::MotionCommand& command) override {
+    if (!is_connected()) return false;
+    if (!conn_.send_line(protocol::move_to_line(command)).empty()) return false;
+    return ack_ok("move_to");
+  }
+
   [[nodiscard]] sdk::RobotState poll(core::Timestamp now) override {
     std::vector<sdk::ControllerEvent> pending;
 

@@ -51,6 +51,11 @@ class ControllerAdapter {
   virtual void resume() = 0;
   virtual void stop() = 0;
 
+  // Immediate motion outside the loaded program: command a single move now — a
+  // jog / teleoperation from the scene (the scene -> robot direction). Returns
+  // false if the controller does not support live motion. Default: unsupported.
+  [[nodiscard]] virtual bool move_to(const machine::MotionCommand& /*command*/) { return false; }
+
   // Latest telemetry for the given wall-clock instant.
   [[nodiscard]] virtual RobotState poll(core::Timestamp now) = 0;
 };

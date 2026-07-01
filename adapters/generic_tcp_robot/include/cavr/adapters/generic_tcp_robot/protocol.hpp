@@ -204,6 +204,15 @@ namespace sdk = cavr::adapter_sdk;
   return j.dump(0);
 }
 
+// Immediate move (jog / teleoperation from the scene): one motion command to run
+// now, outside the loaded program.
+[[nodiscard]] inline std::string move_to_line(const machine::MotionCommand& command) {
+  json::Value j;
+  j.set("cmd", "move_to");
+  j.set("command", command_to_json(command));
+  return j.dump(0);
+}
+
 // The reply/telemetry `type` field.
 [[nodiscard]] inline std::string message_type(const json::Value& j) {
   return j.at("type").as_string();
