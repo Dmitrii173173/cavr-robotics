@@ -6,6 +6,7 @@
 
 #include <sqlite3.h>
 
+#include <exception>
 #include <string>
 
 namespace cavr::catalog {
@@ -80,8 +81,14 @@ CatalogStatus SqliteCatalog::initialize() {
                      &stmt, nullptr);
   bool has_version = false;
   if (stmt && sqlite3_step(stmt) == SQLITE_ROW) {
-    impl_->version = std::stoi(column_text(stmt, 0));
-    has_version = true;
+    try {
+      impl_->version = std::stoi(column_text(stmt, 0));
+      has_version = true;
+    } catch (const std::exception&) {
+      // A catalog_meta row that isn't a parseable integer is treated as absent
+      // rather than propagating an exception out of this SQLite glue code.
+      has_version = false;
+    }
   }
   sqlite3_finalize(stmt);
 

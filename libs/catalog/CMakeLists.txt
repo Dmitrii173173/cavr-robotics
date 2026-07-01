@@ -36,10 +36,14 @@ target_include_directories(cavr_catalog SYSTEM
 
 target_compile_features(cavr_catalog PUBLIC cxx_std_20)
 
-# SQLite uses threads, and dlopen for (unused here) extension loading.
-find_package(Threads REQUIRED)
+# The catalog is only ever driven from a single thread (tests, cavr-record); disable
+# SQLite's internal mutexing so its build does not exercise the OS-specific
+# thread-safety code paths (e.g. the Windows critical-section mutex in os_win.c)
+# that this single-threaded usage never needs.
+target_compile_definitions(cavr_catalog PRIVATE SQLITE_THREADSAFE=0)
+
+# dlopen, for (unused here) extension loading.
 target_link_libraries(cavr_catalog
   PUBLIC
-    Threads::Threads
     ${CMAKE_DL_LIBS}
 )

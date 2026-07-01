@@ -114,6 +114,11 @@ void store_and_check(catalog::Catalog& cat, const catalog::CatalogSession& entry
 }
 
 void test_index_into_catalog() {
+  // Progress markers on std::cerr (unbuffered) so a hard crash on Windows still
+  // shows which phase it reached. Diagnostic aid for the SQLite backend's
+  // Windows-only crash (CAVR issue: cavr_runtime_catalog_index_test 0xC0000409)
+  // — remove once that is root-caused.
+  std::cerr << "[runtime_catalog_index_test] recording session\n";
 #ifdef CAVR_WITH_MCAP
   namespace storage_mcap = cavr::storage_mcap;
   const auto path = temp_path("cavr_catalog_index.mcap");
@@ -137,6 +142,7 @@ void test_index_into_catalog() {
   record::JsonRecordingReader reader(loaded.recording);
 #endif
 
+  std::cerr << "[runtime_catalog_index_test] indexing recording\n";
   const catalog::CatalogSession entry = index_and_check(reader, path, log);
 
   // A real validation run, summarized for the catalog.
@@ -145,24 +151,36 @@ void test_index_into_catalog() {
   const catalog::ValidationSummary summary = runtime::to_validation_summary(report, log.started.nanoseconds());
   check(summary.passed, "demo session validates clean");
 
+  std::cerr << "[runtime_catalog_index_test] storing into in-memory catalog\n";
   catalog::InMemoryCatalog in_memory;
   store_and_check(in_memory, entry, summary, "in-memory");
 
 #ifdef CAVR_WITH_SQLITE
+  std::cerr << "[runtime_catalog_index_test] opening sqlite catalog\n";
   const auto db = temp_path("cavr_catalog_index.db");
   std::filesystem::remove(db);
   catalog::SqliteCatalog sqlite({db.string(), true});
+  std::cerr << "[runtime_catalog_index_test] storing into sqlite catalog\n";
   store_and_check(sqlite, entry, summary, "sqlite");
   std::filesystem::remove(db);
 #endif
 
+  std::cerr << "[runtime_catalog_index_test] done\n";
   std::filesystem::remove(path);
 }
 
 }  // namespace
 
 int main() {
-  test_index_into_catalog();
+  try {
+    test_index_into_catalog();
+  } catch (const std::exception& e) {
+    std::cerr << "[runtime_catalog_index_test] threw std::exception: " << e.what() << '\n';
+    return 1;
+  } catch (...) {
+    std::cerr << "[runtime_catalog_index_test] threw a non-standard exception\n";
+    return 1;
+  }
 
   if (failures != 0) {
     std::cerr << failures << " catalog index test(s) failed\n";

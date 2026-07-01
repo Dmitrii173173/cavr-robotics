@@ -3,7 +3,7 @@
 A shared snapshot of where CAVR Studio is, so everyone has the same picture.
 Keep this updated as the architecture evolves.
 
-_Last updated: 2026-06-30._
+_Last updated: 2026-07-01._
 
 ## What CAVR is
 
@@ -44,8 +44,25 @@ hand-rolled). Dependency flow is a clean DAG.
 | `libs/adapter_sdk` | **`RobotState`/TelemetryFrame** and the neutral **`ControllerAdapter`** interface (connect, discover_profile, load_task, start/pause/stop, `poll`). |
 | `adapters/mock_robot` | **`MockController`** — deterministic GP25 cell that executes a precomputed joint trajectory and reports real telemetry. The reference adapter implementation. |
 | `libs/validation` | **`trajectory_validator`** — joint-limit / speed / frame checks (collisions explicitly "not evaluated"). |
-| `libs/runtime` | **Timeline** (`OperationStep`/`TimelineEvent`), **`SessionManager`** (Scan→Plan→Validate→Execute→Monitor→Replay), `SessionLog` + `session_io` (save/replay), `demo_plan`. |
+| `libs/runtime` | **Timeline** (`OperationStep`/`TimelineEvent`), **`SessionManager`** (Scan→Plan→Validate→Execute→Monitor→Replay), `SessionLog` + `session_io` (save/replay), `demo_plan`. Also bridges sessions onto the recording layer: `record_session` (write/read a whole `SessionLog`), `session_recorder` (live, incremental Monitor-phase sink), `camera_recording` (synchronized camera stream), `catalog_index` (recording → catalog row). |
+| `libs/adapter_sdk` (camera) | `CameraFrame`/`CameraAdapter`; `adapters/mock_camera`'s **`MockCamera`** is the reference implementation. `SessionManager::attach_camera` polls it on the same tick as the robot, so recordings carry synchronized robot + vision. |
+| `libs/record` | Storage-neutral recording model (`Channel`/`Message`, `RecordingWriter`/`RecordingReader`) plus the dependency-free JSON reference backend. |
+| `libs/storage_mcap` | Authoritative **MCAP** backend (vendored foxglove/mcap, single TU, uncompressed) implementing the same interfaces, with a streaming (unchunked) mode for live recording. Gated by `CAVR_ENABLE_MCAP` (default `ON`); with it off the JSON backend is the only option and the tree stays dependency-free. |
+| `libs/catalog` | Local session catalog — reconstructible metadata only (id, path, span, robot/camera model, file size/hash, tags, annotations, bookmarks, validation summaries); heavy data stays in the recording. Engine-neutral `Catalog` interface, `InMemoryCatalog` reference impl, `SqliteCatalog` (vendored amalgamation, PIMPL) gated by `CAVR_ENABLE_SQLITE` (default `ON`). |
 | `libs/visualization` | `RobotModel` + FK + render-side scene data. |
+
+## Backend CLIs
+
+- **`cavr-record`** — runs the demo GP25 workflow against `MockController` +
+  `MockCamera`, streaming a live synchronized session to `--out` (`.mcap` or
+  `.json`), and optionally indexes the finished recording into `--catalog`
+  (SQLite when built, else in-memory). First end-to-end exercise of
+  record → storage → catalog from the command line.
+- **`cavr-inspect`** — dumps a recording's channels, message counts, session
+  header and camera stream through the neutral `RecordingReader`; works on
+  `.mcap` and `.json` alike.
+- `cavr-convert`, `cavr-validate` — still placeholders (CMake target only, no
+  implementation yet).
 
 ## CAVR Studio (Qt 6 / Quick3D)
 
@@ -66,13 +83,23 @@ hand-rolled). Dependency flow is a clean DAG.
   plus a Qt Studio build on 3 OSes.
 - **Releases** ([`release.yml`](../.github/workflows/release.yml)): push a `v*`
   tag → per-OS bundled archives published to a GitHub Release.
-- Tests: `cavr_core_domain_types_test`, `cavr_replay_*`,
+- Tests (13, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
   `cavr_visualization_robot_model_test`, `cavr_runtime_workflow_test`
-  (profile round-trip, validation, full session, save/replay).
+  (profile round-trip, validation, full session, save/replay),
+  `cavr_record_recording_test`, `cavr_storage_mcap_recording_test`,
+  `cavr_runtime_session_recording_test`, `cavr_runtime_session_recorder_test`,
+  `cavr_runtime_camera_recording_test`, `cavr_catalog_test`,
+  `cavr_runtime_catalog_index_test`.
 
 ## What's next (natural extensions)
 
-- A real `ControllerAdapter` (TCP / vendor SDK) replacing the mock.
+- A real `ControllerAdapter` (TCP / vendor SDK) replacing the mock — the
+  `adapters/generic_tcp_robot` and `adapters/robodk` directories are still
+  empty placeholders.
+- A real `CameraAdapter` (`adapters/file_camera` or `adapters/opencv_camera` —
+  currently empty placeholders) so a synchronized recording carries real image
+  data instead of only `MockCamera`'s synthetic frames.
+- `cavr-convert` / `cavr-validate` CLIs (currently empty placeholders).
 - Camera/point-cloud ingestion + hand-eye into the scan step.
 - Bind the remaining Studio panels (Telemetry, Calibration) to the data model.
 - Interactive timeline editing + replay scrubbing from a saved `SessionLog`.

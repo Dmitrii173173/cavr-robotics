@@ -178,12 +178,37 @@ void test_sqlite_future_version_rejected() {
 
 }  // namespace
 
+namespace {
+
+// Runs one sub-test with a progress marker (std::cerr is unbuffered, so this
+// survives a hard crash) and reports any escaping exception instead of letting
+// it reach std::terminate/abort unlabeled. Diagnostic aid for the SQLite
+// backend's Windows-only crash (CAVR issue: cavr_catalog_test 0xC0000409) —
+// remove once that is root-caused.
+void run_step(std::string_view name, void (*step)()) {
+  std::cerr << "[catalog_test] starting " << name << '\n';
+  try {
+    step();
+  } catch (const std::exception& e) {
+    std::cerr << "[catalog_test] " << name << " threw std::exception: " << e.what() << '\n';
+    ++failures;
+    return;
+  } catch (...) {
+    std::cerr << "[catalog_test] " << name << " threw a non-standard exception\n";
+    ++failures;
+    return;
+  }
+  std::cerr << "[catalog_test] finished " << name << '\n';
+}
+
+}  // namespace
+
 int main() {
-  test_in_memory();
+  run_step("test_in_memory", test_in_memory);
 #ifdef CAVR_WITH_SQLITE
-  test_sqlite_contract();
-  test_sqlite_persistence();
-  test_sqlite_future_version_rejected();
+  run_step("test_sqlite_contract", test_sqlite_contract);
+  run_step("test_sqlite_persistence", test_sqlite_persistence);
+  run_step("test_sqlite_future_version_rejected", test_sqlite_future_version_rejected);
 #endif
 
   if (failures != 0) {
