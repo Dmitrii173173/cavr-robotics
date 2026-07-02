@@ -60,6 +60,35 @@ void send_state(tcp::TcpConnection& conn, const cavr::adapter_sdk::RobotState& s
   (void)conn.send_line(msg.dump(0));
 }
 
+// Handles the tool-table commands against the controller. Returns true if the
+// command was a tool command (and has been acked / answered).
+bool handle_tool_command(tcp::TcpConnection& conn, mock::MockController& controller,
+                         const std::string& cmd, const json::Value& value) {
+  if (cmd == "get_tools") {
+    json::Value msg = proto::tools_to_json(*controller.tools());
+    msg.set("type", "tools");
+    (void)conn.send_line(msg.dump(0));
+    return true;
+  }
+  if (cmd == "select_tool") {
+    (void)controller.select_tool(static_cast<int>(value.at("slot").as_int()));
+    send_ack(conn, "select_tool");
+    return true;
+  }
+  if (cmd == "calibrate_tool") {
+    (void)controller.calibrate_tool(static_cast<int>(value.at("slot").as_int()),
+                                    cavr::machine::detail::pose_from_json(value.at("tcp")));
+    send_ack(conn, "calibrate_tool");
+    return true;
+  }
+  if (cmd == "clear_tool") {
+    (void)controller.clear_tool(static_cast<int>(value.at("slot").as_int()));
+    send_ack(conn, "clear_tool");
+    return true;
+  }
+  return false;
+}
+
 // Streams the mock's trajectory to the client until it disconnects or sends stop,
 // looping the demo so the robot keeps moving. Completed frames are folded back
 // into a restart, so the client sees an uninterrupted Running stream.
@@ -92,6 +121,8 @@ void stream_until_stopped(tcp::TcpConnection& conn, mock::MockController& contro
         // to the commanded target; telemetry then reflects the new motion.
         (void)controller.move_to(proto::command_from_json(value->at("command")));
         send_ack(conn, "move_to");
+      } else if (handle_tool_command(conn, controller, cmd, *value)) {
+        // tool select/calibrate/clear applied mid-stream; TCP updates next frame
       } else if (cmd == "pause" || cmd == "resume") {
         send_ack(conn, cmd);  // acknowledged; the demo stream keeps flowing
       }
@@ -137,6 +168,8 @@ void serve_client(tcp::TcpConnection& conn, int rate_hz) {
       (void)controller.start();
       send_ack(conn, "start");
       stream_until_stopped(conn, controller, rate_hz);
+    } else if (handle_tool_command(conn, controller, cmd, *value)) {
+      // tool command handled (get_tools / select / calibrate / clear)
     } else {
       send_ack(conn, cmd);
     }

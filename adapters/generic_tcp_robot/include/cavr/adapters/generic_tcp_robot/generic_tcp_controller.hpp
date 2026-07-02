@@ -69,7 +69,37 @@ class GenericTcpController final : public sdk::ControllerAdapter {
     if (auto reply = read_reply("profile"); reply) {
       profile_ = machine::profile_from_json(reply->at("profile"));
     }
+    // Also pull the controller's tool table into the local mirror.
+    if (conn_.send_line(protocol::command_line("get_tools")).empty()) {
+      if (auto reply = read_reply("tools"); reply) protocol::apply_tools_from_json(*reply, tools_);
+    }
     return profile_;
+  }
+
+  // Tool table mirror kept in sync with the remote controller. Reads are local;
+  // mutations are sent over the protocol and applied on ack.
+  [[nodiscard]] machine::ToolTable* tools() override { return &tools_; }
+
+  [[nodiscard]] bool select_tool(int slot) override {
+    if (!is_connected()) return false;
+    if (!conn_.send_line(protocol::select_tool_line(slot)).empty()) return false;
+    if (!ack_ok("select_tool")) return false;
+    tools_.select(slot);
+    return true;
+  }
+  [[nodiscard]] bool calibrate_tool(int slot, const core::Pose3D& tcp_offset) override {
+    if (!is_connected()) return false;
+    if (!conn_.send_line(protocol::calibrate_tool_line(slot, tcp_offset)).empty()) return false;
+    if (!ack_ok("calibrate_tool")) return false;
+    tools_.set_tool(static_cast<std::size_t>(slot), tcp_offset);
+    return true;
+  }
+  [[nodiscard]] bool clear_tool(int slot) override {
+    if (!is_connected()) return false;
+    if (!conn_.send_line(protocol::clear_tool_line(slot)).empty()) return false;
+    if (!ack_ok("clear_tool")) return false;
+    tools_.clear_tool(static_cast<std::size_t>(slot));
+    return true;
   }
 
   [[nodiscard]] bool load_task(const machine::MotionTask& task) override {
@@ -184,6 +214,7 @@ class GenericTcpController final : public sdk::ControllerAdapter {
   int reply_timeout_ms_;
   mutable TcpConnection conn_;
   mutable machine::MachineProfile profile_;
+  mutable machine::ToolTable tools_;        // local mirror of the remote tool table
   mutable std::vector<std::string> inbox_;  // telemetry lines awaiting the next poll
   sdk::RobotState last_;
   bool connected_{false};

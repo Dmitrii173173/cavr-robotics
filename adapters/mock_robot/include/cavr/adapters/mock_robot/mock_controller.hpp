@@ -115,6 +115,15 @@ class MockController final : public sdk::ControllerAdapter {
 
   // The controller's tool table (10 slots), for selection and calibration.
   [[nodiscard]] machine::ToolTable* tools() override { return &tools_; }
+  [[nodiscard]] bool select_tool(int slot) override { return tools_.select(slot); }
+  [[nodiscard]] bool calibrate_tool(int slot, const core::Pose3D& tcp_offset) override {
+    tools_.set_tool(static_cast<std::size_t>(slot), tcp_offset);
+    return true;
+  }
+  [[nodiscard]] bool clear_tool(int slot) override {
+    tools_.clear_tool(static_cast<std::size_t>(slot));
+    return true;
+  }
 
   [[nodiscard]] sdk::ConnectResult connect(const sdk::ConnectionInfo& info) override {
     info_ = info;

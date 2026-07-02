@@ -20,13 +20,16 @@
 
 #include <cavr/adapter_sdk/robot_state.hpp>
 #include <cavr/machine/enums.hpp>
+#include <cavr/machine/frames.hpp>
 #include <cavr/machine/json.hpp>
 #include <cavr/machine/motion.hpp>
 #include <cavr/machine/profile_io.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace cavr::adapters::generic_tcp_robot::protocol {
@@ -210,6 +213,60 @@ namespace sdk = cavr::adapter_sdk;
   json::Value j;
   j.set("cmd", "move_to");
   j.set("command", command_to_json(command));
+  return j.dump(0);
+}
+
+// -------------------------------------------------------------------- tool table
+
+[[nodiscard]] inline json::Value tools_to_json(const machine::ToolTable& tools) {
+  json::Value root;
+  root.set("current", tools.current());
+  json::Array entries;  // NB: don't name this `slots` — Qt #defines that as a macro
+  for (std::size_t i = 0; i < tools.size(); ++i) {
+    const machine::ToolSlot& s = tools.slot(i);
+    json::Value j;
+    j.set("name", s.name);
+    j.set("calibrated", s.calibrated);
+    j.set("tcp", machine::detail::pose_to_json(s.tcp_offset));
+    entries.push_back(std::move(j));
+  }
+  root.set("tools", std::move(entries));
+  return root;
+}
+
+// Rebuilds a ToolTable from a "tools" message payload (as sent by tools_to_json).
+inline void apply_tools_from_json(const json::Value& root, machine::ToolTable& tools) {
+  tools.clear_all();
+  if (const json::Value* entries = root.find("tools"); entries && entries->is_array()) {
+    const auto& arr = entries->as_array();
+    for (std::size_t i = 0; i < arr.size() && i < tools.size(); ++i) {
+      if (arr[i].at("calibrated").as_bool()) {
+        tools.set_tool(i, machine::detail::pose_from_json(arr[i].at("tcp")), arr[i].at("name").as_string());
+      }
+    }
+  }
+  tools.select(static_cast<int>(root.at("current").as_int()));
+}
+
+[[nodiscard]] inline std::string select_tool_line(int slot) {
+  json::Value j;
+  j.set("cmd", "select_tool");
+  j.set("slot", slot);
+  return j.dump(0);
+}
+
+[[nodiscard]] inline std::string calibrate_tool_line(int slot, const core::Pose3D& tcp_offset) {
+  json::Value j;
+  j.set("cmd", "calibrate_tool");
+  j.set("slot", slot);
+  j.set("tcp", machine::detail::pose_to_json(tcp_offset));
+  return j.dump(0);
+}
+
+[[nodiscard]] inline std::string clear_tool_line(int slot) {
+  json::Value j;
+  j.set("cmd", "clear_tool");
+  j.set("slot", slot);
   return j.dump(0);
 }
 

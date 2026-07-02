@@ -110,6 +110,11 @@ class FakeRobotServer {
         r.set("type", "profile");
         r.set("profile", machine::to_json(cavr::adapters::mock_robot::make_gp25_profile()));
         (void)conn.send_line(r.dump(0));
+      } else if (cmd == "get_tools") {
+        machine::ToolTable tools;  // default table; enough to satisfy discover
+        json::Value r = proto::tools_to_json(tools);
+        r.set("type", "tools");
+        (void)conn.send_line(r.dump(0));
       } else if (cmd == "load_task") {
         saw_task_ = value->at("task").is_array() && !value->at("task").as_array().empty();
         ack(conn, "load_task");
@@ -337,6 +342,106 @@ void test_tool_offset_moves_tcp() {
   check(std::abs(dz - 0.199) < 1e-3, "selecting a longer tool moves the TCP by the tool-length delta");
 }
 
+// Tool table over TCP: calibrating and selecting a tool on the remote controller
+// (through the protocol) changes the remote robot's reported TCP, and the client
+// mirror reflects the calibration.
+void test_tools_over_tcp() {
+  tcp::TcpListener listener;
+  check(listener.listen(0).empty(), "tool server listens");
+  const std::uint16_t port = listener.port();
+
+  std::thread server([&listener] {
+    tcp::TcpConnection conn = listener.accept(3000);
+    if (!conn.is_open()) return;
+    mock::MockController mc;
+    (void)mc.connect({"mock", "mock"});
+
+    auto ack = [&conn](const std::string& c) {
+      json::Value r;
+      r.set("type", "ack");
+      r.set("cmd", c);
+      r.set("ok", true);
+      (void)conn.send_line(r.dump(0));
+    };
+
+    // Phase 1: answer setup commands until the client selects a tool.
+    bool ready_to_stream = false;
+    while (!ready_to_stream) {
+      std::string line;
+      bool timed_out = false;
+      if (!conn.read_line(3000, line, timed_out)) return;
+      std::string error;
+      auto v = json::parse(line, error);
+      if (!v) continue;
+      const std::string cmd = v->at("cmd").as_string();
+      if (cmd == "discover_profile") {
+        json::Value r;
+        r.set("type", "profile");
+        r.set("profile", machine::to_json(mock::make_gp25_profile()));
+        (void)conn.send_line(r.dump(0));
+      } else if (cmd == "get_tools") {
+        json::Value r = proto::tools_to_json(*mc.tools());
+        r.set("type", "tools");
+        (void)conn.send_line(r.dump(0));
+      } else if (cmd == "calibrate_tool") {
+        (void)mc.calibrate_tool(static_cast<int>(v->at("slot").as_int()),
+                                cavr::machine::detail::pose_from_json(v->at("tcp")));
+        ack("calibrate_tool");
+      } else if (cmd == "select_tool") {
+        (void)mc.select_tool(static_cast<int>(v->at("slot").as_int()));
+        ack("select_tool");
+        ready_to_stream = true;
+      }
+    }
+    // Phase 2: stream the (stationary) home pose so the client reads the TCP that
+    // the freshly selected tool produces.
+    std::int64_t t = 0;
+    for (int i = 0; i < 60 && conn.is_open(); ++i) {
+      const sdk::RobotState s = mc.poll(cavr::core::Timestamp::from_nanoseconds(t));
+      t += 20'000'000;
+      json::Value msg = proto::state_to_json(s);
+      msg.set("type", "state");
+      if (!conn.send_line(msg.dump(0)).empty()) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  });
+
+  tcp::GenericTcpController controller;
+  check(controller.connect({endpoint(port), "tcp"}).ok(), "controller connects for tools");
+  (void)controller.discover_profile();  // also pulls the tool mirror (tool 0 calibrated)
+
+  machine::ToolTable* mirror = controller.tools();
+  check(mirror != nullptr, "TCP controller exposes a tool mirror");
+  check(mirror && mirror->slot(0).calibrated, "mirror shows the pre-calibrated flange tool");
+
+  // Calibrate a 0.3 m tool remotely and select it.
+  check(controller.calibrate_tool(1, cavr::core::Pose3D{cavr::core::Vec3{0, 0, 0.3},
+                                                        cavr::core::Quaternion::identity()}),
+        "remote calibrate_tool acked");
+  check(controller.select_tool(1), "remote select_tool acked");
+  check(mirror && mirror->slot(1).calibrated && mirror->current() == 1,
+        "client mirror reflects the remote calibration + selection");
+
+  // Home TCP height with the default 0.101 m tool vs the 0.3 m tool: the streamed
+  // TCP must sit ~0.199 m higher, proving the remote tool change took effect.
+  const auto axes = mock::make_gp25_profile().axes;
+  const double base_z = machine::forward_kinematics(axes, {0, 0, 0, 0, 0, 0},
+                                                     cavr::core::Vec3{0, 0, 0.101}).tcp.position_m.z_m;
+  double best_z = 0.0;
+  std::int64_t now_ns = 0;
+  for (int i = 0; i < 200; ++i) {
+    const sdk::RobotState s = controller.poll(cavr::core::Timestamp::from_nanoseconds(now_ns));
+    now_ns += 20'000'000;
+    best_z = std::max(best_z, s.tcp_pose.position_m.z_m);
+    if (best_z > base_z + 0.15) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  check(best_z > base_z + 0.15, "remote TCP reflects the calibrated long tool");
+
+  controller.stop();
+  server.join();
+}
+
 // A bad endpoint fails cleanly rather than hanging or crashing.
 void test_connect_failure() {
   tcp::GenericTcpController controller;
@@ -357,6 +462,7 @@ int main() {
   test_mock_move_to();
   test_mock_cartesian_move_to();
   test_tool_offset_moves_tcp();
+  test_tools_over_tcp();
   test_connect_failure();
 
   if (failures != 0) {

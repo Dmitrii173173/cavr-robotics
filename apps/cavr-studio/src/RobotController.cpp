@@ -164,16 +164,17 @@ void RobotController::setSpeedMmS(double mm_s) {
 }
 
 void RobotController::selectTool(int slot) {
-  if (auto* tools = controller_->tools(); tools && tools->select(slot)) {
+  // Goes through the adapter so a remote controller is kept in sync (the mock
+  // mutates its table directly; the TCP controller sends a protocol command).
+  if (controller_->select_tool(slot)) {
     emit eventLogged(QString("tool | selected slot %1").arg(slot));
     publish();
   }
 }
 
 void RobotController::calibrateTool(int slot, double x_m, double y_m, double z_m) {
-  if (auto* tools = controller_->tools()) {
-    tools->set_tool(static_cast<std::size_t>(slot),
-                    cavr::core::Pose3D{cavr::core::Vec3{x_m, y_m, z_m}, cavr::core::Quaternion::identity()});
+  const cavr::core::Pose3D tcp{cavr::core::Vec3{x_m, y_m, z_m}, cavr::core::Quaternion::identity()};
+  if (controller_->calibrate_tool(slot, tcp)) {
     emit eventLogged(QString("tool | calibrated slot %1 TCP (%2, %3, %4) m")
                          .arg(slot).arg(x_m).arg(y_m).arg(z_m));
     publish();
@@ -181,8 +182,7 @@ void RobotController::calibrateTool(int slot, double x_m, double y_m, double z_m
 }
 
 void RobotController::clearTool(int slot) {
-  if (auto* tools = controller_->tools()) {
-    tools->clear_tool(static_cast<std::size_t>(slot));
+  if (controller_->clear_tool(slot)) {
     emit eventLogged(QString("tool | cleared slot %1").arg(slot));
     publish();
   }

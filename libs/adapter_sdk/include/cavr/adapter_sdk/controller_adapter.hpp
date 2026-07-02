@@ -57,10 +57,20 @@ class ControllerAdapter {
   // false if the controller does not support live motion. Default: unsupported.
   [[nodiscard]] virtual bool move_to(const machine::MotionCommand& /*command*/) { return false; }
 
-  // The controller's tool table (10 calibration slots), or nullptr when the tools
-  // are managed elsewhere (e.g. on a remote controller). Used to select and
-  // calibrate tools; the selected tool's offset defines the TCP.
+  // The controller's tool table (10 calibration slots) for reading — the current
+  // selection and each slot's calibration. nullptr when unavailable. Mutations go
+  // through select_tool/calibrate_tool/clear_tool so a remote controller stays in
+  // sync (a bare pointer can't send the change over the wire).
   [[nodiscard]] virtual machine::ToolTable* tools() { return nullptr; }
+
+  // Select the active tool (its offset defines the TCP). False if unsupported.
+  [[nodiscard]] virtual bool select_tool(int /*slot*/) { return false; }
+  // Calibrate a tool slot's TCP offset (pose in the flange frame).
+  [[nodiscard]] virtual bool calibrate_tool(int /*slot*/, const core::Pose3D& /*tcp_offset*/) {
+    return false;
+  }
+  // Clear a tool slot's calibration.
+  [[nodiscard]] virtual bool clear_tool(int /*slot*/) { return false; }
 
   // Latest telemetry for the given wall-clock instant.
   [[nodiscard]] virtual RobotState poll(core::Timestamp now) = 0;
