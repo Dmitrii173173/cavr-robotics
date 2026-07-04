@@ -18,12 +18,16 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTableWidget>
 #include <QToolBar>
+#include <QVariant>
+#include <QVariantList>
+#include <QVariantMap>
 #include <QVBoxLayout>
 
 namespace {
@@ -65,6 +69,9 @@ StudioWindow::StudioWindow(QWidget* parent) : QMainWindow(parent) {
   connect(controller_, &RobotController::phaseChanged, this, [this](const QString& phase) {
     if (status_phase_) status_phase_->setText("Phase: " + phase);
   });
+  // Registry changes (save/load/delete) repopulate the robot list + IO table.
+  connect(controller_, &RobotController::robotsChanged, this, [this] { refresh_robots(); });
+  refresh_robots();
 }
 
 QWidget* StudioWindow::create_robot_viewport() {
@@ -109,17 +116,19 @@ void StudioWindow::configure_chrome() {
 }
 
 void StudioWindow::create_docks() {
-  auto* session = make_dock("1 Session", make_session_panel());
-  auto* channels = make_dock("2 Channels", make_channels_panel());
-  auto* events = make_dock("3 Events", make_events_panel());
-  auto* jog = make_dock("4 Jog", make_jog_panel());
-  auto* camera = make_dock("5 Camera View", new CameraView(this));
-  auto* telemetry = make_dock("6 Telemetry", make_telemetry_panel());
-  auto* timeline = make_dock("7 Timeline", new TimelineWidget(this));
-  auto* calibration = make_dock("8 Calibration", make_calibration_panel());
-  auto* faults = make_dock("9 Fault Injection", make_fault_panel());
+  auto* robots = make_dock("1 Robots", make_robots_panel());
+  auto* session = make_dock("2 Session", make_session_panel());
+  auto* channels = make_dock("3 Channels", make_channels_panel());
+  auto* events = make_dock("4 Events", make_events_panel());
+  auto* jog = make_dock("5 Jog", make_jog_panel());
+  auto* camera = make_dock("6 Camera View", new CameraView(this));
+  auto* telemetry = make_dock("7 Telemetry", make_telemetry_panel());
+  auto* timeline = make_dock("8 Timeline", new TimelineWidget(this));
+  auto* calibration = make_dock("9 Calibration", make_calibration_panel());
+  auto* faults = make_dock("10 Fault Injection", make_fault_panel());
 
-  addDockWidget(Qt::LeftDockWidgetArea, session);
+  addDockWidget(Qt::LeftDockWidgetArea, robots);
+  splitDockWidget(robots, session, Qt::Vertical);
   splitDockWidget(session, channels, Qt::Vertical);
   splitDockWidget(channels, events, Qt::Vertical);
   splitDockWidget(events, jog, Qt::Vertical);
@@ -139,6 +148,116 @@ QDockWidget* StudioWindow::make_dock(const QString& title, QWidget* widget) {
   dock->setWidget(widget);
   dock->setAllowedAreas(Qt::AllDockWidgetAreas);
   return dock;
+}
+
+QWidget* StudioWindow::make_robots_panel() {
+  auto* panel = new QWidget;
+  auto* layout = new QVBoxLayout(panel);
+
+  // Saved robots. Selecting one fills the editor + IO table; Load connects it.
+  layout->addWidget(new QLabel("Registered robots"));
+  robot_list_ = new QListWidget;
+  layout->addWidget(robot_list_);
+
+  auto* row_buttons = new QHBoxLayout;
+  auto* load = new QPushButton("Load");
+  auto* del = new QPushButton("Delete");
+  row_buttons->addWidget(load);
+  row_buttons->addWidget(del);
+  layout->addLayout(row_buttons);
+
+  connect(robot_list_, &QListWidget::currentItemChanged, this, [this](QListWidgetItem* item) {
+    if (!item || !robot_name_) return;
+    robot_name_->setText(item->data(Qt::UserRole + 1).toString());       // name
+    robot_endpoint_->setText(item->data(Qt::UserRole + 3).toString());   // endpoint
+    const QString adapter = item->data(Qt::UserRole + 2).toString();
+    const int idx = robot_adapter_->findText(adapter);
+    if (idx >= 0) robot_adapter_->setCurrentIndex(idx);
+  });
+  connect(load, &QPushButton::clicked, this, [this] {
+    if (auto* item = robot_list_->currentItem())
+      controller_->loadRobot(item->data(Qt::UserRole).toString());
+  });
+  connect(del, &QPushButton::clicked, this, [this] {
+    if (auto* item = robot_list_->currentItem())
+      controller_->deleteRobot(item->data(Qt::UserRole).toString());
+  });
+
+  layout->addWidget(horizontal_rule());
+
+  // Editor: name the current (or a new) robot and save it to the registry.
+  layout->addWidget(new QLabel("Add / save robot"));
+  auto* form = new QFormLayout;
+  robot_name_ = new QLineEdit;
+  robot_name_->setPlaceholderText("Robot name");
+  robot_adapter_ = new QComboBox;
+  robot_adapter_->addItems({"mock", "generic_tcp"});
+  robot_endpoint_ = new QLineEdit;
+  robot_endpoint_->setPlaceholderText("host:port (for generic_tcp)");
+  form->addRow("Name", robot_name_);
+  form->addRow("Adapter", robot_adapter_);
+  form->addRow("Endpoint", robot_endpoint_);
+  layout->addLayout(form);
+
+  auto* save = new QPushButton("Save current as…");
+  connect(save, &QPushButton::clicked, this, [this] {
+    controller_->saveRobot(robot_name_->text(), robot_adapter_->currentText(),
+                           robot_endpoint_->text());
+  });
+  layout->addWidget(save);
+
+  layout->addWidget(horizontal_rule());
+
+  // IO banks of the currently connected robot (Y/M/AIN/AOT/GIN/GOT for PNR).
+  layout->addWidget(new QLabel("IO channels (current robot)"));
+  io_table_ = new QTableWidget(0, 4);
+  io_table_->setHorizontalHeaderLabels({"Name", "Kind", "Direction", "Variable"});
+  io_table_->verticalHeader()->hide();
+  io_table_->horizontalHeader()->setStretchLastSection(true);
+  io_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  layout->addWidget(io_table_);
+
+  auto* scroll = new QScrollArea;
+  scroll->setWidget(panel);
+  scroll->setWidgetResizable(true);
+  scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  return scroll;
+}
+
+void StudioWindow::refresh_robots() {
+  if (!robot_list_ || !controller_) return;
+
+  const QString selected =
+      robot_list_->currentItem() ? robot_list_->currentItem()->data(Qt::UserRole).toString()
+                                 : QString();
+  robot_list_->clear();
+  const QVariantList robots = controller_->robotList();
+  for (const QVariant& entry : robots) {
+    const QVariantMap m = entry.toMap();
+    const QString label = QString("%1  —  %2  (%3 axes, %4 IO)")
+                              .arg(m.value("name").toString(), m.value("model").toString())
+                              .arg(m.value("dof").toInt())
+                              .arg(m.value("ioCount").toInt());
+    auto* item = new QListWidgetItem(label, robot_list_);
+    item->setData(Qt::UserRole, m.value("id"));
+    item->setData(Qt::UserRole + 1, m.value("name"));
+    item->setData(Qt::UserRole + 2, m.value("adapter"));
+    item->setData(Qt::UserRole + 3, m.value("endpoint"));
+    if (m.value("id").toString() == selected) robot_list_->setCurrentItem(item);
+  }
+
+  // Rebuild the IO table from the currently connected robot's profile.
+  if (io_table_) {
+    const QVariantList io = controller_->ioChannels();
+    io_table_->setRowCount(static_cast<int>(io.size()));
+    for (int r = 0; r < io.size(); ++r) {
+      const QVariantMap c = io[r].toMap();
+      io_table_->setItem(r, 0, new QTableWidgetItem(c.value("name").toString()));
+      io_table_->setItem(r, 1, new QTableWidgetItem(c.value("kind").toString()));
+      io_table_->setItem(r, 2, new QTableWidgetItem(c.value("direction").toString()));
+      io_table_->setItem(r, 3, new QTableWidgetItem(c.value("variable").toString()));
+    }
+  }
 }
 
 QWidget* StudioWindow::make_session_panel() {

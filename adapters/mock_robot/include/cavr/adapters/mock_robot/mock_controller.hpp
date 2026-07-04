@@ -103,13 +103,89 @@ namespace sdk = cavr::adapter_sdk;
   return p;
 }
 
+// A representative PNR 6-axis articulated robot. Same base-frame convention as the
+// GP25 (Y up, origins relative to the parent joint) so forward/inverse kinematics
+// work unchanged, but with PNR's IO vocabulary: the Y/M/AIN/AOT/GIN/GOT banks a
+// PNR controller exposes, mapped onto controller_variable. It reuses the GP25 mesh
+// for visualization until a PNR asset is added. This is the first proof that the
+// registry is vendor-neutral: a different profile, the same MockController.
+[[nodiscard]] inline machine::MachineProfile make_pnr_profile() {
+  machine::MachineProfile p;
+  p.schema_version = 1;
+  p.id = "pnr_6axis_cell1";
+  p.display_name = "PNR 6-Axis Cell 1";
+  p.robot_model = "PNR PR6-900";
+  p.controller = "PNR-C";
+  p.asset = "assets/robots/yaskawa_gp25/gp25.glb";  // placeholder mesh until a PNR asset exists
+
+  p.axes = {
+      {"J1", machine::JointType::Revolute, {0, 1, 0}, {0.0, 0.150, 0.0}, deg(-170), deg(170), deg(230), "PULSE[1]"},
+      {"J2", machine::JointType::Revolute, {1, 0, 0}, {-0.140, 0.190, 0.050}, deg(-90), deg(135), deg(225), "PULSE[2]"},
+      {"J3", machine::JointType::Revolute, {1, 0, 0}, {0.140, 0.420, 0.0}, deg(-180), deg(70), deg(230), "PULSE[3]"},
+      {"J4", machine::JointType::Revolute, {0, 0, 1}, {0.0, 0.150, 0.300}, deg(-190), deg(190), deg(430), "PULSE[4]"},
+      {"J5", machine::JointType::Revolute, {1, 0, 0}, {0.0, 0.0, 0.240}, deg(-120), deg(120), deg(430), "PULSE[5]"},
+      {"J6", machine::JointType::Revolute, {0, 0, 1}, {0.0, 0.0, 0.0}, deg(-360), deg(360), deg(630), "PULSE[6]"},
+  };
+
+  p.frames = {
+      {"world", machine::FrameKind::World, "", {}},
+      {"base", machine::FrameKind::Base, "world", {}},
+      {"flange", machine::FrameKind::Flange, "base", {}},
+      {"tcp", machine::FrameKind::Tool, "flange", {core::Vec3{0.0, 0.0, 0.090}, core::Quaternion::identity()}},
+      {"table", machine::FrameKind::User, "world", {core::Vec3{0.5, 0.0, 0.35}, core::Quaternion::identity()}},
+      {"camera", machine::FrameKind::Camera, "flange", {}},
+  };
+
+  // PNR IO banks: Y = digital outputs, M = internal relays (merkers), AIN/AOT =
+  // analog in/out, GIN/GOT = group (word) in/out.
+  p.io = {
+      {"Y0", machine::IoKind::Digital, machine::IoDirection::Output, 0, "Y0"},
+      {"Y1", machine::IoKind::Digital, machine::IoDirection::Output, 1, "Y1"},
+      {"X0", machine::IoKind::Digital, machine::IoDirection::Input, 0, "X0"},
+      {"X1", machine::IoKind::Digital, machine::IoDirection::Input, 1, "X1"},
+      {"M0", machine::IoKind::Digital, machine::IoDirection::Internal, 0, "M0"},
+      {"M1", machine::IoKind::Digital, machine::IoDirection::Internal, 1, "M1"},
+      {"AIN0", machine::IoKind::Analog, machine::IoDirection::Input, 0, "AIN0"},
+      {"AOT0", machine::IoKind::Analog, machine::IoDirection::Output, 0, "AOT0"},
+      {"GIN0", machine::IoKind::Group, machine::IoDirection::Input, 0, "GIN0"},
+      {"GOT0", machine::IoKind::Group, machine::IoDirection::Output, 0, "GOT0"},
+  };
+
+  p.telemetry = {
+      {"joint_position", machine::ChannelKind::JointPosition, "rad", 100.0, "RPOS"},
+      {"cartesian_pose", machine::ChannelKind::CartesianPose, "m", 100.0, "RCART"},
+      {"speed", machine::ChannelKind::Speed, "mm/s", 100.0, "SPEED"},
+      {"program_state", machine::ChannelKind::ProgramState, "", 50.0, "PSTATE"},
+      {"io_state", machine::ChannelKind::IoState, "", 50.0, "IO"},
+      {"error", machine::ChannelKind::Error, "", 50.0, "ALARM"},
+      {"event", machine::ChannelKind::Event, "", 50.0, "EVENT"},
+  };
+
+  p.motion = {
+      {machine::MotionKind::MoveJ, true, deg(60)},
+      {machine::MotionKind::MoveL, true, 250.0},
+      {machine::MotionKind::MoveC, true, 250.0},
+      {machine::MotionKind::Wait, true, 0.0},
+      {machine::MotionKind::ToolOn, true, 0.0},
+      {machine::MotionKind::ToolOff, true, 0.0},
+  };
+
+  p.weld.enabled = false;  // a general-purpose PNR arm, not a welding cell
+  return p;
+}
+
 class MockController final : public sdk::ControllerAdapter {
  public:
-  MockController() {
-    // Tool 0 is the bare flange TCP (the GP25's 0.101 m tool plate), pre-calibrated
-    // and selected — a real controller ships with its tools already calibrated.
-    tools_.set_tool(0, core::Pose3D{core::Vec3{0.0, 0.0, 0.101}, core::Quaternion::identity()},
-                    "flange TCP");
+  MockController() : MockController(make_gp25_profile()) {}
+
+  // Serve a specific profile (e.g. make_pnr_profile()), so one mock backend can
+  // stand in for any robot in the registry. Tool 0 is pre-calibrated to the
+  // profile's tool frame — a real controller ships with its tools already set.
+  explicit MockController(machine::MachineProfile profile)
+      : custom_profile_(std::move(profile)) {
+    core::Pose3D flange_tcp{core::Vec3{0.0, 0.0, 0.101}, core::Quaternion::identity()};
+    if (const machine::CoordinateFrame* tcp = custom_profile_.frame("tcp")) flange_tcp = tcp->transform;
+    tools_.set_tool(0, flange_tcp, "flange TCP");
     tools_.select(0);
   }
 
@@ -127,7 +203,7 @@ class MockController final : public sdk::ControllerAdapter {
 
   [[nodiscard]] sdk::ConnectResult connect(const sdk::ConnectionInfo& info) override {
     info_ = info;
-    profile_ = make_gp25_profile();
+    profile_ = custom_profile_;
     connected_ = true;
     return {true, {}};
   }
@@ -366,6 +442,7 @@ class MockController final : public sdk::ControllerAdapter {
   }
 
   sdk::ConnectionInfo info_;
+  machine::MachineProfile custom_profile_;  // the profile this mock serves on connect()
   machine::MachineProfile profile_;
   machine::MotionTask task_;
   machine::ProgramState state_{machine::ProgramState::Idle};
