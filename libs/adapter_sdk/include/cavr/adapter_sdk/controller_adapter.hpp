@@ -72,6 +72,12 @@ class ControllerAdapter {
   // Clear a tool slot's calibration.
   [[nodiscard]] virtual bool clear_tool(int /*slot*/) { return false; }
 
+  // Write an IO channel by its profile name (digital 0/1, analog a scaled value).
+  // Only output/internal channels are writable; inputs are driven by the cell.
+  // Returns false if the controller does not support IO writes, or the channel is
+  // unknown or not writable. Reading IO is via RobotState.io in poll().
+  [[nodiscard]] virtual bool write_io(const std::string& /*name*/, double /*value*/) { return false; }
+
   // Latest telemetry for the given wall-clock instant.
   [[nodiscard]] virtual RobotState poll(core::Timestamp now) = 0;
 };

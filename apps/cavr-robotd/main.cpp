@@ -121,6 +121,10 @@ void stream_until_stopped(tcp::TcpConnection& conn, mock::MockController& contro
         // to the commanded target; telemetry then reflects the new motion.
         (void)controller.move_to(proto::command_from_json(value->at("command")));
         send_ack(conn, "move_to");
+      } else if (cmd == "io_write") {
+        // Write an IO channel mid-stream; the value shows up in the next frame.
+        (void)controller.write_io(value->at("name").as_string(), value->at("value").as_number());
+        send_ack(conn, "io_write");
       } else if (handle_tool_command(conn, controller, cmd, *value)) {
         // tool select/calibrate/clear applied mid-stream; TCP updates next frame
       } else if (cmd == "pause" || cmd == "resume") {
@@ -168,6 +172,9 @@ void serve_client(tcp::TcpConnection& conn, int rate_hz) {
       (void)controller.start();
       send_ack(conn, "start");
       stream_until_stopped(conn, controller, rate_hz);
+    } else if (cmd == "io_write") {
+      (void)controller.write_io(value->at("name").as_string(), value->at("value").as_number());
+      send_ack(conn, "io_write");
     } else if (handle_tool_command(conn, controller, cmd, *value)) {
       // tool command handled (get_tools / select / calibrate / clear)
     } else {

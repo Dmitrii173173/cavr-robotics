@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -103,13 +104,89 @@ namespace sdk = cavr::adapter_sdk;
   return p;
 }
 
+// A representative PNR 6-axis articulated robot. Same base-frame convention as the
+// GP25 (Y up, origins relative to the parent joint) so forward/inverse kinematics
+// work unchanged, but with PNR's IO vocabulary: the Y/M/AIN/AOT/GIN/GOT banks a
+// PNR controller exposes, mapped onto controller_variable. It reuses the GP25 mesh
+// for visualization until a PNR asset is added. This is the first proof that the
+// registry is vendor-neutral: a different profile, the same MockController.
+[[nodiscard]] inline machine::MachineProfile make_pnr_profile() {
+  machine::MachineProfile p;
+  p.schema_version = 1;
+  p.id = "pnr_6axis_cell1";
+  p.display_name = "PNR 6-Axis Cell 1";
+  p.robot_model = "PNR PR6-900";
+  p.controller = "PNR-C";
+  p.asset = "assets/robots/yaskawa_gp25/gp25.glb";  // placeholder mesh until a PNR asset exists
+
+  p.axes = {
+      {"J1", machine::JointType::Revolute, {0, 1, 0}, {0.0, 0.150, 0.0}, deg(-170), deg(170), deg(230), "PULSE[1]"},
+      {"J2", machine::JointType::Revolute, {1, 0, 0}, {-0.140, 0.190, 0.050}, deg(-90), deg(135), deg(225), "PULSE[2]"},
+      {"J3", machine::JointType::Revolute, {1, 0, 0}, {0.140, 0.420, 0.0}, deg(-180), deg(70), deg(230), "PULSE[3]"},
+      {"J4", machine::JointType::Revolute, {0, 0, 1}, {0.0, 0.150, 0.300}, deg(-190), deg(190), deg(430), "PULSE[4]"},
+      {"J5", machine::JointType::Revolute, {1, 0, 0}, {0.0, 0.0, 0.240}, deg(-120), deg(120), deg(430), "PULSE[5]"},
+      {"J6", machine::JointType::Revolute, {0, 0, 1}, {0.0, 0.0, 0.0}, deg(-360), deg(360), deg(630), "PULSE[6]"},
+  };
+
+  p.frames = {
+      {"world", machine::FrameKind::World, "", {}},
+      {"base", machine::FrameKind::Base, "world", {}},
+      {"flange", machine::FrameKind::Flange, "base", {}},
+      {"tcp", machine::FrameKind::Tool, "flange", {core::Vec3{0.0, 0.0, 0.090}, core::Quaternion::identity()}},
+      {"table", machine::FrameKind::User, "world", {core::Vec3{0.5, 0.0, 0.35}, core::Quaternion::identity()}},
+      {"camera", machine::FrameKind::Camera, "flange", {}},
+  };
+
+  // PNR IO banks: Y = digital outputs, M = internal relays (merkers), AIN/AOT =
+  // analog in/out, GIN/GOT = group (word) in/out.
+  p.io = {
+      {"Y0", machine::IoKind::Digital, machine::IoDirection::Output, 0, "Y0"},
+      {"Y1", machine::IoKind::Digital, machine::IoDirection::Output, 1, "Y1"},
+      {"X0", machine::IoKind::Digital, machine::IoDirection::Input, 0, "X0"},
+      {"X1", machine::IoKind::Digital, machine::IoDirection::Input, 1, "X1"},
+      {"M0", machine::IoKind::Digital, machine::IoDirection::Internal, 0, "M0"},
+      {"M1", machine::IoKind::Digital, machine::IoDirection::Internal, 1, "M1"},
+      {"AIN0", machine::IoKind::Analog, machine::IoDirection::Input, 0, "AIN0"},
+      {"AOT0", machine::IoKind::Analog, machine::IoDirection::Output, 0, "AOT0"},
+      {"GIN0", machine::IoKind::Group, machine::IoDirection::Input, 0, "GIN0"},
+      {"GOT0", machine::IoKind::Group, machine::IoDirection::Output, 0, "GOT0"},
+  };
+
+  p.telemetry = {
+      {"joint_position", machine::ChannelKind::JointPosition, "rad", 100.0, "RPOS"},
+      {"cartesian_pose", machine::ChannelKind::CartesianPose, "m", 100.0, "RCART"},
+      {"speed", machine::ChannelKind::Speed, "mm/s", 100.0, "SPEED"},
+      {"program_state", machine::ChannelKind::ProgramState, "", 50.0, "PSTATE"},
+      {"io_state", machine::ChannelKind::IoState, "", 50.0, "IO"},
+      {"error", machine::ChannelKind::Error, "", 50.0, "ALARM"},
+      {"event", machine::ChannelKind::Event, "", 50.0, "EVENT"},
+  };
+
+  p.motion = {
+      {machine::MotionKind::MoveJ, true, deg(60)},
+      {machine::MotionKind::MoveL, true, 250.0},
+      {machine::MotionKind::MoveC, true, 250.0},
+      {machine::MotionKind::Wait, true, 0.0},
+      {machine::MotionKind::ToolOn, true, 0.0},
+      {machine::MotionKind::ToolOff, true, 0.0},
+  };
+
+  p.weld.enabled = false;  // a general-purpose PNR arm, not a welding cell
+  return p;
+}
+
 class MockController final : public sdk::ControllerAdapter {
  public:
-  MockController() {
-    // Tool 0 is the bare flange TCP (the GP25's 0.101 m tool plate), pre-calibrated
-    // and selected — a real controller ships with its tools already calibrated.
-    tools_.set_tool(0, core::Pose3D{core::Vec3{0.0, 0.0, 0.101}, core::Quaternion::identity()},
-                    "flange TCP");
+  MockController() : MockController(make_gp25_profile()) {}
+
+  // Serve a specific profile (e.g. make_pnr_profile()), so one mock backend can
+  // stand in for any robot in the registry. Tool 0 is pre-calibrated to the
+  // profile's tool frame — a real controller ships with its tools already set.
+  explicit MockController(machine::MachineProfile profile)
+      : custom_profile_(std::move(profile)) {
+    core::Pose3D flange_tcp{core::Vec3{0.0, 0.0, 0.101}, core::Quaternion::identity()};
+    if (const machine::CoordinateFrame* tcp = custom_profile_.frame("tcp")) flange_tcp = tcp->transform;
+    tools_.set_tool(0, flange_tcp, "flange TCP");
     tools_.select(0);
   }
 
@@ -125,9 +202,25 @@ class MockController final : public sdk::ControllerAdapter {
     return true;
   }
 
+  // Write an IO channel. Only output/internal channels are writable; a write to an
+  // input or an unknown channel is rejected. The value is held and reported back in
+  // the telemetry stream, so the scene reflects it on the next poll.
+  [[nodiscard]] bool write_io(const std::string& name, double value) override {
+    const auto it = std::find_if(profile_.io.begin(), profile_.io.end(),
+                                 [&](const machine::IoChannel& c) { return c.name == name; });
+    if (it == profile_.io.end() || it->direction == machine::IoDirection::Input) return false;
+    io_[name] = value;
+    return true;
+  }
+
   [[nodiscard]] sdk::ConnectResult connect(const sdk::ConnectionInfo& info) override {
     info_ = info;
-    profile_ = make_gp25_profile();
+    profile_ = custom_profile_;
+    // Seed the IO map from the profile: every channel starts at 0, except a
+    // "part_present" input which the cell reports as present (a GP25 demo signal).
+    io_.clear();
+    for (const auto& c : profile_.io) io_[c.name] = 0.0;
+    if (io_.count("part_present")) io_["part_present"] = 1.0;
     connected_ = true;
     return {true, {}};
   }
@@ -347,14 +440,19 @@ class MockController final : public sdk::ControllerAdapter {
     const auto fk = machine::forward_kinematics(profile_.axes, s.joint_positions, tools_.current_offset());
     s.tcp_pose = fk.tcp;
 
+    // The GP25 weld process drives its own signals while welding; other channels
+    // (and every channel on a non-welding robot like the PNR) hold whatever was
+    // last written through write_io. Report the IO map in the profile's order.
     const bool weld = step >= 0 && step < static_cast<int>(weld_active_.size()) && weld_active_[static_cast<std::size_t>(step)];
-    s.io = {
-        {"weld_on", weld ? 1.0 : 0.0},
-        {"gas_on", weld ? 1.0 : 0.0},
-        {"arc_established", weld ? 1.0 : 0.0},
-        {"part_present", 1.0},
-        {"wire_feed", weld ? 6.5 : 0.0},
-    };
+    if (io_.count("weld_on")) {
+      io_["weld_on"] = weld ? 1.0 : 0.0;
+      io_["gas_on"] = weld ? 1.0 : 0.0;
+      io_["arc_established"] = weld ? 1.0 : 0.0;
+      if (io_.count("wire_feed")) io_["wire_feed"] = weld ? 6.5 : 0.0;
+    }
+    s.io.clear();
+    s.io.reserve(profile_.io.size());
+    for (const auto& c : profile_.io) s.io.push_back({c.name, io_[c.name]});
     s.tcp_speed_mm_s = moving > 0 ? profile_.weld.travel_speed_mm_s : 0.0;
 
     const bool scanning = s.current_step_label.find("scan") != std::string::npos;
@@ -366,6 +464,7 @@ class MockController final : public sdk::ControllerAdapter {
   }
 
   sdk::ConnectionInfo info_;
+  machine::MachineProfile custom_profile_;  // the profile this mock serves on connect()
   machine::MachineProfile profile_;
   machine::MotionTask task_;
   machine::ProgramState state_{machine::ProgramState::Idle};
@@ -376,6 +475,7 @@ class MockController final : public sdk::ControllerAdapter {
   std::vector<char> weld_active_;
   double total_s_{0.0};
   mutable std::vector<double> last_joints_;  // last reported pose, so a jog starts from it
+  mutable std::map<std::string, double> io_;  // live IO values (written + process-driven)
   machine::ToolTable tools_;                 // 10 tool slots; the selected one defines the TCP
 
   bool connected_{false};

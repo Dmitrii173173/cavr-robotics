@@ -1,11 +1,20 @@
 #include "RobotController.hpp"
 
+#include "AdapterFactory.hpp"
+
+#include <cavr/machine/enums.hpp>
 #include <cavr/runtime/demo_plan.hpp>
 #include <cavr/runtime/session_io.hpp>
 
+#include <QDir>
+#include <QStandardPaths>
+#include <QVariantMap>
+
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 namespace {
@@ -14,28 +23,77 @@ constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
 }  // namespace
 
 RobotController::RobotController(QObject* parent) : QObject(parent) {
-  // Pick the robot source. CAVR_ROBOT_ENDPOINT=host:port drives the scene from a
-  // remote robot over TCP (a cavr-robotd or a vendor bridge) — the robot -> scene
-  // digital-twin path; otherwise the in-process mock keeps the standalone demo.
-  cavr::adapter_sdk::ConnectionInfo info{"mock", "mock"};
-  if (const char* endpoint = std::getenv("CAVR_ROBOT_ENDPOINT"); endpoint && *endpoint) {
-    controller_ = std::make_unique<cavr::adapters::generic_tcp_robot::GenericTcpController>();
-    remote_ = true;
-    info = {endpoint, "tcp"};
-  } else {
-    controller_ = std::make_unique<cavr::adapters::mock_robot::MockController>();
+  // Open the robot registry (SQLite) in the app's writable data directory, so saved
+  // robots persist across runs. If it can't be opened, the app still works — it just
+  // falls back to the in-code presets and can't save.
+  const QString data_dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+  QDir().mkpath(data_dir);
+  const std::string db_path = (data_dir + "/robot_registry.db").toStdString();
+  registry_ = std::make_unique<cavr::catalog::SqliteProfileStore>(
+      cavr::catalog::CatalogOpenOptions{db_path, true});
+  if (auto status = registry_->initialize(); !status) {
+    emit eventLogged(QString("registry | init failed: ") + QString::fromStdString(status.error));
+    registry_.reset();
   }
+  seed_default_robots();
 
-  // connect -> discover profile -> plan -> validate -> execute
+  connect(&timer_, &QTimer::timeout, this, &RobotController::tick);
+
+  // Initial robot. CAVR_ROBOT_ENDPOINT=host:port still drives the scene from a
+  // remote robot over TCP (back-compat); otherwise connect the first registered
+  // robot, or a GP25 preset if the registry is unavailable.
+  if (const char* endpoint = std::getenv("CAVR_ROBOT_ENDPOINT"); endpoint && *endpoint) {
+    connectRobot("generic_tcp", endpoint, cavr::adapters::mock_robot::make_gp25_profile());
+  } else if (registry_) {
+    const auto robots = registry_->list_robots();
+    if (!robots.empty())
+      connectRobot(robots.front().adapter, robots.front().endpoint, robots.front().profile);
+    else
+      connectRobot("mock", "", cavr::adapters::mock_robot::make_gp25_profile());
+  } else {
+    connectRobot("mock", "", cavr::adapters::mock_robot::make_gp25_profile());
+  }
+  timer_.start(20);
+}
+
+void RobotController::connectRobot(const std::string& adapter, const std::string& endpoint,
+                                   const cavr::machine::MachineProfile& profile) {
+  manual_ = false;
+  remote_ = (adapter != "mock");
+  controller_ = cavr::studio::make_adapter(adapter, profile);
+
+  cavr::adapter_sdk::ConnectionInfo info{endpoint.empty() ? std::string("mock") : endpoint,
+                                         remote_ ? "tcp" : "mock"};
+  // connect -> discover profile -> plan -> validate -> execute. discover_profile()
+  // returns the mock's injected profile or the TCP bridge's, so the scene mirrors
+  // whichever robot was chosen through the one ControllerAdapter seam.
   static_cast<void>(manager_.connect(*controller_, info));
   static_cast<void>(manager_.discover_profile());
   manager_.set_plan(cavr::runtime::make_demo_plan());
   static_cast<void>(manager_.validate());
-  static_cast<void>(manager_.execute("studio_session_0"));
-
-  connect(&timer_, &QTimer::timeout, this, &RobotController::tick);
-  timer_.start(20);
+  static_cast<void>(manager_.execute("studio_session_" + std::to_string(run_index_)));
   publish();
+  emit robotsChanged();
+}
+
+void RobotController::seed_default_robots() {
+  if (!registry_ || !registry_->list_robots().empty()) return;
+
+  cavr::catalog::StoredRobot gp;
+  gp.id = "gp25_cell1";
+  gp.display_name = "Yaskawa GP25 (mock)";
+  gp.profile = cavr::adapters::mock_robot::make_gp25_profile();
+  gp.adapter = "mock";
+  gp.transport = "mock";
+  static_cast<void>(registry_->upsert_robot(gp));
+
+  cavr::catalog::StoredRobot pnr;
+  pnr.id = "pnr_cell1";
+  pnr.display_name = "PNR 6-Axis (mock)";
+  pnr.profile = cavr::adapters::mock_robot::make_pnr_profile();
+  pnr.adapter = "mock";
+  pnr.transport = "mock";
+  static_cast<void>(registry_->upsert_robot(pnr));
 }
 
 void RobotController::tick() {
@@ -203,4 +261,117 @@ void RobotController::stop() {
 bool RobotController::saveSession(const QString& path) {
   std::vector<std::string> errors;
   return cavr::runtime::save_session_log(manager_.log(), path.toStdString(), errors);
+}
+
+namespace {
+// A stable, filesystem/DB-friendly id from a display name: lowercase alphanumerics,
+// runs of anything else collapsed to a single '_'. Falls back to "robot".
+std::string slugify(const QString& name) {
+  std::string out;
+  bool last_us = false;
+  for (const QChar qc : name) {
+    const char c = static_cast<char>(qc.toLatin1());
+    if (std::isalnum(static_cast<unsigned char>(c))) {
+      out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+      last_us = false;
+    } else if (!out.empty() && !last_us) {
+      out.push_back('_');
+      last_us = true;
+    }
+  }
+  while (!out.empty() && out.back() == '_') out.pop_back();
+  return out.empty() ? std::string("robot") : out;
+}
+}  // namespace
+
+QVariantList RobotController::robotList() const {
+  QVariantList out;
+  if (!registry_) return out;
+  for (const auto& r : registry_->list_robots()) {
+    QVariantMap m;
+    m["id"] = QString::fromStdString(r.id);
+    m["name"] = QString::fromStdString(r.display_name);
+    m["model"] = QString::fromStdString(r.profile.robot_model);
+    m["adapter"] = QString::fromStdString(r.adapter);
+    m["endpoint"] = QString::fromStdString(r.endpoint);
+    m["dof"] = static_cast<int>(r.profile.dof());
+    m["ioCount"] = static_cast<int>(r.profile.io.size());
+    out.push_back(m);
+  }
+  return out;
+}
+
+void RobotController::saveRobot(const QString& name, const QString& adapter,
+                                const QString& endpoint) {
+  if (!registry_) {
+    emit eventLogged("registry | unavailable, cannot save");
+    return;
+  }
+  cavr::catalog::StoredRobot r;
+  r.id = slugify(name);
+  r.display_name = name.trimmed().isEmpty() ? std::string("Unnamed robot") : name.toStdString();
+  r.profile = manager_.profile();  // the currently connected robot's profile
+  r.adapter = adapter.isEmpty() ? std::string("mock") : adapter.toStdString();
+  r.transport = (r.adapter == "mock") ? "mock" : "tcp";
+  r.endpoint = endpoint.toStdString();
+  r.updated_ns = now_ns_;
+  if (auto status = registry_->upsert_robot(r); !status) {
+    emit eventLogged(QString("registry | save failed: ") + QString::fromStdString(status.error));
+    return;
+  }
+  emit eventLogged("registry | saved " + QString::fromStdString(r.display_name) + " (" +
+                   QString::fromStdString(r.id) + ")");
+  emit robotsChanged();
+}
+
+void RobotController::loadRobot(const QString& id) {
+  if (!registry_) return;
+  const auto r = registry_->find_robot(id.toStdString());
+  if (!r) {
+    emit eventLogged("registry | unknown robot: " + id);
+    return;
+  }
+  ++run_index_;
+  connectRobot(r->adapter, r->endpoint, r->profile);
+  emit eventLogged("registry | loaded " + QString::fromStdString(r->display_name));
+}
+
+void RobotController::deleteRobot(const QString& id) {
+  if (!registry_) return;
+  if (auto status = registry_->delete_robot(id.toStdString()); !status) {
+    emit eventLogged(QString("registry | delete failed: ") + QString::fromStdString(status.error));
+    return;
+  }
+  emit eventLogged("registry | deleted " + id);
+  emit robotsChanged();
+}
+
+QVariantList RobotController::ioChannels() const {
+  // Live values come from the latest telemetry frame, keyed by channel name.
+  const auto& latest = manager_.latest();
+  QVariantList out;
+  for (const auto& c : manager_.profile().io) {
+    double value = 0.0;
+    for (const auto& io : latest.io) {
+      if (io.name == c.name) { value = io.value; break; }
+    }
+    QVariantMap m;
+    m["name"] = QString::fromStdString(c.name);
+    m["kind"] = QString::fromStdString(cavr::machine::to_string(c.kind));
+    m["direction"] = QString::fromStdString(cavr::machine::to_string(c.direction));
+    m["variable"] = QString::fromStdString(c.controller_variable);
+    m["value"] = value;
+    m["writable"] = c.direction != cavr::machine::IoDirection::Input;
+    out.push_back(m);
+  }
+  return out;
+}
+
+void RobotController::writeIo(const QString& name, double value) {
+  if (!controller_->write_io(name.toStdString(), value)) {
+    emit eventLogged("io | write rejected: " + name);
+    return;
+  }
+  emit eventLogged(QString("io | %1 = %2").arg(name).arg(value));
+  publish();
 }

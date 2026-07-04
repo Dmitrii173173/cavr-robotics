@@ -229,6 +229,23 @@ endif()
 
 add_test(NAME cavr_catalog_test COMMAND cavr_catalog_test)
 
+add_executable(cavr_profile_store_test
+  profile_store_test.cpp
+)
+
+target_link_libraries(cavr_profile_store_test
+  PRIVATE
+    CAVR::catalog
+    CAVR::machine
+    CAVR::adapter_mock_robot
+)
+
+if(CAVR_ENABLE_SQLITE)
+  target_compile_definitions(cavr_profile_store_test PRIVATE CAVR_WITH_SQLITE)
+endif()
+
+add_test(NAME cavr_profile_store_test COMMAND cavr_profile_store_test)
+
 add_executable(cavr_runtime_catalog_index_test
   runtime_catalog_index_test.cpp
 )

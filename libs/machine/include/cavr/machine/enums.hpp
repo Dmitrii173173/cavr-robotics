@@ -16,8 +16,12 @@ enum class JointType { Revolute, Prismatic };
 // Standard industrial frame roles.
 enum class FrameKind { World, Base, Flange, Tool, User, Camera, Object };
 
-enum class IoKind { Digital, Analog };
-enum class IoDirection { Input, Output };
+// Digital/analog single points plus Group: a word of bits addressed as one value
+// (a vendor group signal such as PNR's GIN/GOT).
+enum class IoKind { Digital, Analog, Group };
+// Input/Output physical signals plus Internal: a controller-internal relay/merker
+// that is neither a physical input nor output (e.g. PNR's M signals).
+enum class IoDirection { Input, Output, Internal };
 
 // Telemetry channel payloads the application understands.
 enum class ChannelKind {
@@ -65,11 +69,12 @@ inline constexpr std::array<std::pair<FrameKind, std::string_view>, 7> kFrameKin
     {FrameKind::Tool, "tool"}, {FrameKind::User, "user"}, {FrameKind::Camera, "camera"},
     {FrameKind::Object, "object"}}};
 
-inline constexpr std::array<std::pair<IoKind, std::string_view>, 2> kIoKind{{
-    {IoKind::Digital, "digital"}, {IoKind::Analog, "analog"}}};
+inline constexpr std::array<std::pair<IoKind, std::string_view>, 3> kIoKind{{
+    {IoKind::Digital, "digital"}, {IoKind::Analog, "analog"}, {IoKind::Group, "group"}}};
 
-inline constexpr std::array<std::pair<IoDirection, std::string_view>, 2> kIoDirection{{
-    {IoDirection::Input, "input"}, {IoDirection::Output, "output"}}};
+inline constexpr std::array<std::pair<IoDirection, std::string_view>, 3> kIoDirection{{
+    {IoDirection::Input, "input"}, {IoDirection::Output, "output"},
+    {IoDirection::Internal, "internal"}}};
 
 inline constexpr std::array<std::pair<ChannelKind, std::string_view>, 11> kChannelKind{{
     {ChannelKind::JointPosition, "joint_position"}, {ChannelKind::CartesianPose, "cartesian_pose"},

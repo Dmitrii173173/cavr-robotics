@@ -9,6 +9,8 @@ if(NOT CAVR_ENABLE_SQLITE)
     INTERFACE
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
+  # profile_store.hpp stores a MachineProfile, so the registry headers need machine.
+  target_link_libraries(cavr_catalog INTERFACE CAVR::machine)
   return()
 endif()
 
@@ -18,6 +20,7 @@ enable_language(C)
 
 add_library(cavr_catalog STATIC
   src/sqlite_catalog.cpp
+  src/sqlite_profile_store.cpp
   ${CMAKE_SOURCE_DIR}/third_party/sqlite/sqlite3.c
 )
 add_library(CAVR::catalog ALIAS cavr_catalog)
@@ -26,6 +29,10 @@ target_include_directories(cavr_catalog
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
+
+# The robot registry (profile_store) stores a MachineProfile and serializes it with
+# machine::profile_io, so the catalog target now depends on the machine headers.
+target_link_libraries(cavr_catalog PUBLIC CAVR::machine)
 
 # Vendored SQLite header is an internal detail (SYSTEM/PRIVATE: warnings and the
 # header stay out of our consumers).
