@@ -32,7 +32,9 @@ class StudioWindow final : public QMainWindow {
   QComboBox* robot_adapter_{nullptr};
   QLineEdit* robot_endpoint_{nullptr};
   QTableWidget* io_table_{nullptr};
+  QComboBox* io_write_channel_{nullptr};  // writable channels for the write controls
   void refresh_robots();
+  void refresh_io();  // live IO values + writable-channel list, on each telemetry tick
 
   [[nodiscard]] QDockWidget* make_dock(const QString& title, QWidget* widget);
   [[nodiscard]] QWidget* make_robots_panel();

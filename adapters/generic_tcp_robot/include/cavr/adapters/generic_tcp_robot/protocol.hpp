@@ -216,6 +216,16 @@ namespace sdk = cavr::adapter_sdk;
   return j.dump(0);
 }
 
+// Write one IO channel by profile name (digital 0/1, analog scaled). The server
+// applies it and acks "io_write"; the change then shows up in the telemetry stream.
+[[nodiscard]] inline std::string io_write_line(const std::string& name, double value) {
+  json::Value j;
+  j.set("cmd", "io_write");
+  j.set("name", name);
+  j.set("value", value);
+  return j.dump(0);
+}
+
 // -------------------------------------------------------------------- tool table
 
 [[nodiscard]] inline json::Value tools_to_json(const machine::ToolTable& tools) {

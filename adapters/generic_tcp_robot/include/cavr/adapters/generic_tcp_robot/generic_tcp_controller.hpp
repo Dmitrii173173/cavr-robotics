@@ -130,6 +130,14 @@ class GenericTcpController final : public sdk::ControllerAdapter {
     return ack_ok("move_to");
   }
 
+  // Write an IO channel on the remote controller; the change surfaces in the
+  // telemetry stream. Returns whether the server acknowledged the write.
+  [[nodiscard]] bool write_io(const std::string& name, double value) override {
+    if (!is_connected()) return false;
+    if (!conn_.send_line(protocol::io_write_line(name, value)).empty()) return false;
+    return ack_ok("io_write");
+  }
+
   [[nodiscard]] sdk::RobotState poll(core::Timestamp now) override {
     std::vector<sdk::ControllerEvent> pending;
 

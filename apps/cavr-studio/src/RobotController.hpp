@@ -73,9 +73,13 @@ class RobotController final : public QObject {
   Q_INVOKABLE void saveRobot(const QString& name, const QString& adapter, const QString& endpoint);
   Q_INVOKABLE void loadRobot(const QString& id);
   Q_INVOKABLE void deleteRobot(const QString& id);
-  // Current robot's IO channels as {name, kind, direction, variable} — the profile's
-  // declared banks (Y/M/AIN/AOT/GIN/GOT for PNR), for display.
+  // Current robot's IO channels as {name, kind, direction, variable, value, writable}
+  // — the profile's declared banks (Y/M/AIN/AOT/GIN/GOT for PNR) with their live
+  // telemetry value, for display and to drive the write controls.
   Q_INVOKABLE QVariantList ioChannels() const;
+  // Write an IO channel (digital 0/1, analog scaled) through the adapter, so the
+  // scene -> robot IO path stays in sync on a remote controller too.
+  Q_INVOKABLE void writeIo(const QString& name, double value);
 
  signals:
   void telemetryChanged();

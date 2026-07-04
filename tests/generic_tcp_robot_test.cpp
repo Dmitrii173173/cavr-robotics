@@ -135,6 +135,18 @@ class FakeRobotServer {
         json::Value msg = proto::state_to_json(s);
         msg.set("type", "state");
         (void)conn.send_line(msg.dump(0));
+      } else if (cmd == "io_write") {
+        // Apply the IO write: acknowledge, then stream one state frame carrying the
+        // written channel, so the client sees it surface in telemetry.
+        ack(conn, "io_write");
+        cavr::adapter_sdk::RobotState s;
+        s.timestamp = cavr::core::Timestamp::from_nanoseconds(0);
+        s.program_state = machine::ProgramState::Running;
+        s.servo_state = machine::ServoState::On;
+        s.io.push_back({value->at("name").as_string(), value->at("value").as_number()});
+        json::Value msg = proto::state_to_json(s);
+        msg.set("type", "state");
+        (void)conn.send_line(msg.dump(0));
       } else if (cmd == "stop") {
         ack(conn, "stop");
         running = false;
@@ -318,6 +330,54 @@ void test_mock_cartesian_move_to() {
         "mock Cartesian jog reaches the commanded TCP position");
 }
 
+// The mock's IO: writing an output holds and reports the value; writing an input
+// or an unknown channel is rejected.
+void test_mock_io_write() {
+  mock::MockController controller(mock::make_pnr_profile());
+  (void)controller.connect({"mock", "mock"});
+
+  check(controller.write_io("Y0", 1.0), "mock accepts a write to an output (Y0)");
+  check(controller.write_io("M0", 1.0), "mock accepts a write to an internal relay (M0)");
+  check(!controller.write_io("X0", 1.0), "mock rejects a write to an input (X0)");
+  check(!controller.write_io("NOPE", 1.0), "mock rejects a write to an unknown channel");
+
+  const sdk::RobotState s = controller.poll(cavr::core::Timestamp::from_nanoseconds(0));
+  double y0 = -1.0;
+  double x0 = -1.0;
+  for (const auto& io : s.io) {
+    if (io.name == "Y0") y0 = io.value;
+    if (io.name == "X0") x0 = io.value;
+  }
+  check(std::abs(y0 - 1.0) < 1e-9, "written output surfaces in telemetry");
+  check(std::abs(x0 - 0.0) < 1e-9, "untouched input stays 0");
+}
+
+// IO over TCP: write_io is a request/ack round trip and the value comes back in the
+// server-pushed telemetry stream.
+void test_io_write_over_tcp() {
+  FakeRobotServer server;
+  check(server.start(/*frames=*/1).empty(), "fake server (io) starts");
+
+  tcp::GenericTcpController controller;
+  check(controller.connect({endpoint(server.port()), "tcp"}).ok(), "io: controller connects");
+  check(controller.write_io("Y0", 1.0), "io: write_io acknowledged over TCP");
+
+  bool saw = false;
+  std::int64_t now_ns = 0;
+  for (int i = 0; i < 200 && !saw; ++i) {
+    const sdk::RobotState s = controller.poll(cavr::core::Timestamp::from_nanoseconds(now_ns));
+    now_ns += 20'000'000;
+    for (const auto& io : s.io) {
+      if (io.name == "Y0" && io.value > 0.5) saw = true;
+    }
+    if (!saw) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  check(saw, "io: written value surfaced through the telemetry stream");
+
+  controller.stop();
+  server.join();
+}
+
 // A calibrated tool changes the TCP: extending the tool along Z pushes the
 // reported TCP further from the flange by the tool length.
 void test_tool_offset_moves_tcp() {
@@ -461,6 +521,8 @@ int main() {
   test_move_to_jog();
   test_mock_move_to();
   test_mock_cartesian_move_to();
+  test_mock_io_write();
+  test_io_write_over_tcp();
   test_tool_offset_moves_tcp();
   test_tools_over_tcp();
   test_connect_failure();

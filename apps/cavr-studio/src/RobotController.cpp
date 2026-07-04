@@ -347,14 +347,31 @@ void RobotController::deleteRobot(const QString& id) {
 }
 
 QVariantList RobotController::ioChannels() const {
+  // Live values come from the latest telemetry frame, keyed by channel name.
+  const auto& latest = manager_.latest();
   QVariantList out;
   for (const auto& c : manager_.profile().io) {
+    double value = 0.0;
+    for (const auto& io : latest.io) {
+      if (io.name == c.name) { value = io.value; break; }
+    }
     QVariantMap m;
     m["name"] = QString::fromStdString(c.name);
     m["kind"] = QString::fromStdString(cavr::machine::to_string(c.kind));
     m["direction"] = QString::fromStdString(cavr::machine::to_string(c.direction));
     m["variable"] = QString::fromStdString(c.controller_variable);
+    m["value"] = value;
+    m["writable"] = c.direction != cavr::machine::IoDirection::Input;
     out.push_back(m);
   }
   return out;
+}
+
+void RobotController::writeIo(const QString& name, double value) {
+  if (!controller_->write_io(name.toStdString(), value)) {
+    emit eventLogged("io | write rejected: " + name);
+    return;
+  }
+  emit eventLogged(QString("io | %1 = %2").arg(name).arg(value));
+  publish();
 }

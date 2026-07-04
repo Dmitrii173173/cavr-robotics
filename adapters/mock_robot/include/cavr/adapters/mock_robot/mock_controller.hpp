@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -201,9 +202,25 @@ class MockController final : public sdk::ControllerAdapter {
     return true;
   }
 
+  // Write an IO channel. Only output/internal channels are writable; a write to an
+  // input or an unknown channel is rejected. The value is held and reported back in
+  // the telemetry stream, so the scene reflects it on the next poll.
+  [[nodiscard]] bool write_io(const std::string& name, double value) override {
+    const auto it = std::find_if(profile_.io.begin(), profile_.io.end(),
+                                 [&](const machine::IoChannel& c) { return c.name == name; });
+    if (it == profile_.io.end() || it->direction == machine::IoDirection::Input) return false;
+    io_[name] = value;
+    return true;
+  }
+
   [[nodiscard]] sdk::ConnectResult connect(const sdk::ConnectionInfo& info) override {
     info_ = info;
     profile_ = custom_profile_;
+    // Seed the IO map from the profile: every channel starts at 0, except a
+    // "part_present" input which the cell reports as present (a GP25 demo signal).
+    io_.clear();
+    for (const auto& c : profile_.io) io_[c.name] = 0.0;
+    if (io_.count("part_present")) io_["part_present"] = 1.0;
     connected_ = true;
     return {true, {}};
   }
@@ -423,14 +440,19 @@ class MockController final : public sdk::ControllerAdapter {
     const auto fk = machine::forward_kinematics(profile_.axes, s.joint_positions, tools_.current_offset());
     s.tcp_pose = fk.tcp;
 
+    // The GP25 weld process drives its own signals while welding; other channels
+    // (and every channel on a non-welding robot like the PNR) hold whatever was
+    // last written through write_io. Report the IO map in the profile's order.
     const bool weld = step >= 0 && step < static_cast<int>(weld_active_.size()) && weld_active_[static_cast<std::size_t>(step)];
-    s.io = {
-        {"weld_on", weld ? 1.0 : 0.0},
-        {"gas_on", weld ? 1.0 : 0.0},
-        {"arc_established", weld ? 1.0 : 0.0},
-        {"part_present", 1.0},
-        {"wire_feed", weld ? 6.5 : 0.0},
-    };
+    if (io_.count("weld_on")) {
+      io_["weld_on"] = weld ? 1.0 : 0.0;
+      io_["gas_on"] = weld ? 1.0 : 0.0;
+      io_["arc_established"] = weld ? 1.0 : 0.0;
+      if (io_.count("wire_feed")) io_["wire_feed"] = weld ? 6.5 : 0.0;
+    }
+    s.io.clear();
+    s.io.reserve(profile_.io.size());
+    for (const auto& c : profile_.io) s.io.push_back({c.name, io_[c.name]});
     s.tcp_speed_mm_s = moving > 0 ? profile_.weld.travel_speed_mm_s : 0.0;
 
     const bool scanning = s.current_step_label.find("scan") != std::string::npos;
@@ -453,6 +475,7 @@ class MockController final : public sdk::ControllerAdapter {
   std::vector<char> weld_active_;
   double total_s_{0.0};
   mutable std::vector<double> last_joints_;  // last reported pose, so a jog starts from it
+  mutable std::map<std::string, double> io_;  // live IO values (written + process-driven)
   machine::ToolTable tools_;                 // 10 tool slots; the selected one defines the TCP
 
   bool connected_{false};
