@@ -89,6 +89,18 @@ target_link_libraries(cavr_machine_frames_test
 
 add_test(NAME cavr_machine_frames_test COMMAND cavr_machine_frames_test)
 
+add_executable(cavr_machine_arc_test
+  machine_arc_test.cpp
+)
+
+target_link_libraries(cavr_machine_arc_test
+  PRIVATE
+    CAVR::machine
+    CAVR::core
+)
+
+add_test(NAME cavr_machine_arc_test COMMAND cavr_machine_arc_test)
+
 add_executable(cavr_runtime_workflow_test
   runtime_workflow_test.cpp
 )

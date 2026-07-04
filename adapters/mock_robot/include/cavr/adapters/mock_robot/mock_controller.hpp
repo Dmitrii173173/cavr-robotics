@@ -7,6 +7,7 @@
 // events). poll(now) advances the precomputed trajectory by wall-clock time.
 
 #include <cavr/adapter_sdk/controller_adapter.hpp>
+#include <cavr/machine/arc.hpp>
 #include <cavr/machine/frames.hpp>
 #include <cavr/machine/ik.hpp>
 #include <cavr/machine/kinematics.hpp>
@@ -261,6 +262,61 @@ class MockController final : public sdk::ControllerAdapter {
     start.resize(dof(), 0.0);
 
     const core::Pose3D tool = tools_.current_offset();
+
+    // MoveC: follow a circular arc start -> via -> target. Sample the arc, solve IK
+    // for each pose (seeded from the previous one), and run the resulting joint
+    // knots as a multi-segment trajectory, so the TCP traces the arc, not a chord.
+    if (command.kind == machine::MotionKind::MoveC && command.via && command.target.pose) {
+      const core::Pose3D start_pose = machine::forward_kinematics(profile_.axes, start, tool).tcp;
+      constexpr int kArcSamples = 13;
+      const machine::ArcPath arc =
+          machine::sample_arc(start_pose, *command.via, *command.target.pose, kArcSamples);
+
+      std::vector<std::vector<double>> knots;
+      knots.reserve(arc.poses.size());
+      knots.push_back(start);
+      std::vector<double> seed = start;
+      for (std::size_t i = 1; i < arc.poses.size(); ++i) {
+        const machine::IkResult ik =
+            machine::inverse_kinematics(profile_.axes, arc.poses[i], seed, tool);
+        if (!ik.converged) return false;  // the arc leaves the reachable workspace
+        std::vector<double> q = ik.joints;
+        q.resize(dof(), 0.0);
+        knots.push_back(q);
+        seed = std::move(q);
+      }
+
+      // Each sub-segment is timed by its chord length at the commanded mm/s.
+      const double speed_mm_s = command.speed > 0 ? command.speed : 50.0;
+      durations_.clear();
+      double total = 0.0;
+      for (std::size_t i = 1; i < arc.poses.size(); ++i) {
+        const core::Vec3 p0 = arc.poses[i - 1].position_m;
+        const core::Vec3 p1 = arc.poses[i].position_m;
+        const double seg_m = std::sqrt((p1.x_m - p0.x_m) * (p1.x_m - p0.x_m) +
+                                       (p1.y_m - p0.y_m) * (p1.y_m - p0.y_m) +
+                                       (p1.z_m - p0.z_m) * (p1.z_m - p0.z_m));
+        const double d = std::max(0.02, seg_m * 1000.0 / speed_mm_s);
+        durations_.push_back(d);
+        total += d;
+      }
+
+      const bool weld = command.weld && command.weld->enabled;
+      task_.assign(knots.size() - 1, command);  // one program-step per sub-segment
+      weld_active_.assign(knots.size() - 1, static_cast<char>(weld ? 1 : 0));
+      waypoints_ = std::move(knots);
+      starts_.assign(durations_.size() + 1, 0.0);
+      for (std::size_t i = 0; i < durations_.size(); ++i) starts_[i + 1] = starts_[i] + durations_[i];
+      total_s_ = total;
+      state_ = machine::ProgramState::Running;
+      started_ = true;
+      paused_ = false;
+      started_clock_ = false;
+      last_step_ = -1;
+      completed_emitted_ = false;
+      return true;
+    }
+
     std::vector<double> target;
     bool cartesian = false;
     if (command.target.joints) {
