@@ -364,6 +364,55 @@ void test_mock_movec() {
   check(std::sqrt(dx * dx + dy * dy + dz * dz) < 3.0e-3, "MoveC arc reaches the commanded end pose");
 }
 
+// A loaded program with Cartesian moves: the mock executes MoveL (straight, IK'd)
+// and MoveC (arc) as real motion and reaches the final commanded pose.
+void test_mock_program_cartesian() {
+  mock::MockController controller;
+  (void)controller.connect({"mock", "mock"});
+  const auto profile = mock::make_gp25_profile();
+  const cavr::core::Vec3 tool{0, 0, 0.101};
+
+  const cavr::core::Pose3D pa =
+      cavr::machine::forward_kinematics(profile.axes, {0.2, -0.10, 0.10, 0.0, 0.20, 0.0}, tool).tcp;
+  const cavr::core::Pose3D via =
+      cavr::machine::forward_kinematics(profile.axes, {0.35, -0.18, 0.16, 0.0, 0.28, 0.0}, tool).tcp;
+  const cavr::core::Pose3D pc =
+      cavr::machine::forward_kinematics(profile.axes, {0.5, -0.25, 0.20, 0.0, 0.35, 0.0}, tool).tcp;
+
+  machine::MotionTask task;
+  machine::MotionCommand ml;
+  ml.kind = machine::MotionKind::MoveL;
+  ml.target.pose = pa;
+  ml.speed = 300.0;
+  ml.label = "movel";
+  task.push_back(ml);
+  machine::MotionCommand mc;
+  mc.kind = machine::MotionKind::MoveC;
+  mc.via = via;
+  mc.target.pose = pc;
+  mc.speed = 300.0;
+  mc.label = "movec";
+  task.push_back(mc);
+
+  check(controller.load_task(task), "Cartesian program loads");
+  check(controller.start(), "Cartesian program starts");
+
+  sdk::RobotState s;
+  std::int64_t now_ns = 0;
+  bool completed = false;
+  for (int i = 0; i < 2000 && !completed; ++i) {
+    s = controller.poll(cavr::core::Timestamp::from_nanoseconds(now_ns));
+    now_ns += 20'000'000;
+    if (s.program_state == machine::ProgramState::Completed) completed = true;
+  }
+  check(completed, "Cartesian program reaches Completed");
+  const double dx = s.tcp_pose.position_m.x_m - pc.position_m.x_m;
+  const double dy = s.tcp_pose.position_m.y_m - pc.position_m.y_m;
+  const double dz = s.tcp_pose.position_m.z_m - pc.position_m.z_m;
+  check(std::sqrt(dx * dx + dy * dy + dz * dz) < 3.0e-3,
+        "program's MoveL + MoveC reach the final pose");
+}
+
 // The mock's IO: writing an output holds and reports the value; writing an input
 // or an unknown channel is rejected.
 void test_mock_io_write() {
@@ -556,6 +605,7 @@ int main() {
   test_mock_move_to();
   test_mock_cartesian_move_to();
   test_mock_movec();
+  test_mock_program_cartesian();
   test_mock_io_write();
   test_io_write_over_tcp();
   test_tool_offset_moves_tcp();

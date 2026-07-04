@@ -10,6 +10,8 @@
 #include <QStandardPaths>
 #include <QVariantMap>
 
+#include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
@@ -20,6 +22,17 @@
 namespace {
 constexpr std::int64_t kTickNs = 20'000'000;  // 50 Hz simulated clock
 constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
+
+// Fixed-axis (Rx, Ry, Rz) Euler angles in degrees from a quaternion — the pendant
+// convention a controller reports orientation in.
+[[nodiscard]] std::array<double, 3> euler_deg(const cavr::core::Quaternion& q) {
+  const double x = q.x(), y = q.y(), z = q.z(), w = q.w();
+  const double roll = std::atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y));
+  const double sinp = std::clamp(2.0 * (w * y - z * x), -1.0, 1.0);
+  const double pitch = std::asin(sinp);
+  const double yaw = std::atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z));
+  return {roll * kRadToDeg, pitch * kRadToDeg, yaw * kRadToDeg};
+}
 }  // namespace
 
 RobotController::RobotController(QObject* parent) : QObject(parent) {
@@ -58,20 +71,27 @@ RobotController::RobotController(QObject* parent) : QObject(parent) {
 
 void RobotController::connectRobot(const std::string& adapter, const std::string& endpoint,
                                    const cavr::machine::MachineProfile& profile) {
-  manual_ = false;
   remote_ = (adapter != "mock");
   controller_ = cavr::studio::make_adapter(adapter, profile);
 
   cavr::adapter_sdk::ConnectionInfo info{endpoint.empty() ? std::string("mock") : endpoint,
                                          remote_ ? "tcp" : "mock"};
-  // connect -> discover profile -> plan -> validate -> execute. discover_profile()
-  // returns the mock's injected profile or the TCP bridge's, so the scene mirrors
-  // whichever robot was chosen through the one ControllerAdapter seam.
+  // connect -> discover profile -> plan -> validate. discover_profile() returns the
+  // mock's injected profile or the TCP bridge's, so the scene mirrors whichever
+  // robot was chosen through the one ControllerAdapter seam. The demo is NOT started
+  // here: the robot holds its home pose on connect and only moves when the operator
+  // presses Run Demo or jogs it. (A remote robot drives its own motion; we mirror.)
   static_cast<void>(manager_.connect(*controller_, info));
   static_cast<void>(manager_.discover_profile());
   manager_.set_plan(cavr::runtime::make_demo_plan());
   static_cast<void>(manager_.validate());
-  static_cast<void>(manager_.execute("studio_session_" + std::to_string(run_index_)));
+  if (remote_) {
+    // A remote robot is already running in the field; start mirroring its stream.
+    static_cast<void>(manager_.execute("studio_session_" + std::to_string(run_index_)));
+  } else {
+    // A local mock is a simulation: hold the home pose and only move on Run Demo/jog.
+    manual_ = true;
+  }
   publish();
   emit robotsChanged();
 }
@@ -127,6 +147,26 @@ void RobotController::publish() {
 
   tcp_position_ = QVariantList{s.tcp_pose.position_m.x_m, s.tcp_pose.position_m.y_m,
                                s.tcp_pose.position_m.z_m};
+
+  // TCP readout in the selected coordinate system (mm + degrees). The telemetry
+  // reports the TCP in the base frame; User is expressed relative to the User
+  // frame, the others coincide with base at the world origin.
+  cavr::core::Pose3D shown = s.tcp_pose;
+  if (coord_sys_ == cavr::machine::CoordinateSystem::User) {
+    cavr::core::Pose3D user_frame;
+    for (const auto& f : manager_.profile().frames) {
+      if (f.kind == cavr::machine::FrameKind::User) { user_frame = f.transform; break; }
+    }
+    shown = cavr::machine::compose(cavr::machine::invert(user_frame), s.tcp_pose);
+  }
+  const std::array<double, 3> rpy = euler_deg(shown.orientation);
+  tcp_coords_ = QVariantList{shown.position_m.x_m * 1000.0, shown.position_m.y_m * 1000.0,
+                             shown.position_m.z_m * 1000.0, rpy[0], rpy[1], rpy[2]};
+  {
+    QString name = QString::fromStdString(cavr::machine::to_string(coord_sys_));
+    if (!name.isEmpty()) name[0] = name[0].toUpper();
+    coord_system_name_ = name;
+  }
 
   phase_ = QString::fromStdString(cavr::runtime::to_string(manager_.phase()));
   program_state_ = QString::fromStdString(cavr::machine::to_string(s.program_state));
@@ -206,6 +246,29 @@ void RobotController::jogCartesian(double dx_m, double dy_m, double dz_m,
   publish();
 }
 
+void RobotController::jogArc() {
+  // A visible MoveC demo: arc from the current TCP through a via offset up-and-out
+  // to an end offset further along, curving through 3 non-collinear points.
+  const auto& latest = manager_.latest();
+  cavr::core::Pose3D via = latest.tcp_pose;
+  via.position_m.x_m += 0.05;
+  via.position_m.z_m += 0.05;
+  cavr::core::Pose3D end = latest.tcp_pose;
+  end.position_m.x_m += 0.10;
+
+  cavr::machine::MotionCommand cmd;
+  cmd.kind = cavr::machine::MotionKind::MoveC;
+  cmd.via = via;
+  cmd.target.pose = end;
+  cmd.speed = speed_mm_s_;  // mm/s
+  cmd.label = "jog arc (MoveC)";
+  manual_ = true;
+  if (!controller_->move_to(cmd)) {
+    emit eventLogged("jog arc | target unreachable (IK did not converge)");
+  }
+  publish();
+}
+
 void RobotController::setCoordinateSystem(int system) {
   switch (system) {
     case 0: coord_sys_ = cavr::machine::CoordinateSystem::World; break;
@@ -215,6 +278,7 @@ void RobotController::setCoordinateSystem(int system) {
     default: coord_sys_ = cavr::machine::CoordinateSystem::Base; break;
   }
   emit eventLogged(QString("coordinate system | ") + cavr::machine::to_string(coord_sys_));
+  publish();  // refresh the TCP readout in the newly selected frame
 }
 
 void RobotController::setSpeedMmS(double mm_s) {
@@ -261,6 +325,67 @@ void RobotController::stop() {
 bool RobotController::saveSession(const QString& path) {
   std::vector<std::string> errors;
   return cavr::runtime::save_session_log(manager_.log(), path.toStdString(), errors);
+}
+
+void RobotController::teachPoint() {
+  program_points_.push_back(manager_.latest().tcp_pose);
+  const auto& p = program_points_.back().position_m;
+  emit eventLogged(QString("program | taught P%1  (%2, %3, %4) mm")
+                       .arg(program_points_.size())
+                       .arg(p.x_m * 1000.0, 0, 'f', 1)
+                       .arg(p.y_m * 1000.0, 0, 'f', 1)
+                       .arg(p.z_m * 1000.0, 0, 'f', 1));
+  emit programChanged();
+}
+
+void RobotController::clearProgram() {
+  program_points_.clear();
+  emit eventLogged("program | cleared");
+  emit programChanged();
+}
+
+void RobotController::runProgram() {
+  if (program_points_.empty()) {
+    emit eventLogged("program | no taught points to run");
+    return;
+  }
+  // Build a straight-line (MoveL) program through the taught points and run it via
+  // the SessionManager — the same connect/plan/validate/execute path as the demo.
+  cavr::runtime::Timeline plan;
+  cavr::runtime::OperationStep step;
+  step.id = 0;
+  step.kind = cavr::runtime::OperationKind::RobotMotion;
+  step.label = "taught program";
+  for (std::size_t i = 0; i < program_points_.size(); ++i) {
+    cavr::machine::MotionCommand ml;
+    ml.kind = cavr::machine::MotionKind::MoveL;
+    ml.target.pose = program_points_[i];
+    ml.speed = speed_mm_s_;  // mm/s
+    ml.label = "P" + std::to_string(i + 1);
+    step.motion.push_back(std::move(ml));
+  }
+  plan.steps.push_back(std::move(step));
+
+  manual_ = false;
+  manager_.set_plan(std::move(plan));
+  static_cast<void>(manager_.validate());
+  static_cast<void>(manager_.execute("studio_program_" + std::to_string(++run_index_)));
+  emit eventLogged(QString("program | running %1 points").arg(program_points_.size()));
+  publish();
+}
+
+QVariantList RobotController::programPoints() const {
+  QVariantList out;
+  for (std::size_t i = 0; i < program_points_.size(); ++i) {
+    const auto& p = program_points_[i].position_m;
+    QVariantMap m;
+    m["index"] = static_cast<int>(i + 1);
+    m["x"] = p.x_m * 1000.0;
+    m["y"] = p.y_m * 1000.0;
+    m["z"] = p.z_m * 1000.0;
+    out.push_back(m);
+  }
+  return out;
 }
 
 namespace {

@@ -23,6 +23,7 @@
 #include <QPushButton>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTabWidget>
 #include <QTableWidget>
 #include <QColor>
 #include <QToolBar>
@@ -72,9 +73,15 @@ StudioWindow::StudioWindow(QWidget* parent) : QMainWindow(parent) {
   });
   // Registry changes (save/load/delete) repopulate the robot list + IO table.
   connect(controller_, &RobotController::robotsChanged, this, [this] { refresh_robots(); });
-  // Each telemetry tick refreshes the live IO values.
-  connect(controller_, &RobotController::telemetryChanged, this, [this] { refresh_io(); });
+  // Teaching / clearing program points repopulates the program list.
+  connect(controller_, &RobotController::programChanged, this, [this] { refresh_program(); });
+  // Each telemetry tick refreshes the live IO values and the pendant read-out.
+  connect(controller_, &RobotController::telemetryChanged, this, [this] {
+    refresh_io();
+    update_pendant();
+  });
   refresh_robots();
+  update_pendant();
 }
 
 QWidget* StudioWindow::create_robot_viewport() {
@@ -119,30 +126,51 @@ void StudioWindow::configure_chrome() {
 }
 
 void StudioWindow::create_docks() {
-  auto* robots = make_dock("1 Robots", make_robots_panel());
-  auto* session = make_dock("2 Session", make_session_panel());
-  auto* channels = make_dock("3 Channels", make_channels_panel());
-  auto* events = make_dock("4 Events", make_events_panel());
-  auto* jog = make_dock("5 Jog", make_jog_panel());
-  auto* camera = make_dock("6 Camera View", new CameraView(this));
-  auto* telemetry = make_dock("7 Telemetry", make_telemetry_panel());
-  auto* timeline = make_dock("8 Timeline", new TimelineWidget(this));
-  auto* calibration = make_dock("9 Calibration", make_calibration_panel());
-  auto* faults = make_dock("10 Fault Injection", make_fault_panel());
+  // Visual-Studio-style tool windows: each dock area holds a group of tabbed
+  // panels (one visible at a time, all reachable by tab) instead of many panels
+  // squeezed into vertical stacks. Tabs sit at the top of each group.
+  setTabPosition(Qt::AllDockWidgetAreas, QTabWidget::North);
 
+  auto* robots = make_dock("Robots", make_robots_panel());
+  auto* jog = make_dock("Jog + Tools", make_jog_panel());
+  auto* session = make_dock("Session", make_session_panel());
+  auto* channels = make_dock("Channels", make_channels_panel());
+  auto* calibration = make_dock("Calibration", make_calibration_panel());
+
+  auto* camera = make_dock("Camera", new CameraView(this));
+  auto* telemetry = make_dock("Telemetry", make_telemetry_panel());
+  auto* faults = make_dock("Faults", make_fault_panel());
+
+  auto* events = make_dock("Events", make_events_panel());
+  auto* timeline = make_dock("Timeline", new TimelineWidget(this));
+
+  // Left group: robot registry, jog/tools, session, channels, calibration.
   addDockWidget(Qt::LeftDockWidgetArea, robots);
-  splitDockWidget(robots, session, Qt::Vertical);
-  splitDockWidget(session, channels, Qt::Vertical);
-  splitDockWidget(channels, events, Qt::Vertical);
-  splitDockWidget(events, jog, Qt::Vertical);
+  for (auto* d : {jog, session, channels, calibration}) {
+    addDockWidget(Qt::LeftDockWidgetArea, d);
+    tabifyDockWidget(robots, d);
+  }
 
+  // Right group: camera view, telemetry, fault injection.
   addDockWidget(Qt::RightDockWidgetArea, camera);
-  splitDockWidget(camera, telemetry, Qt::Vertical);
-  splitDockWidget(telemetry, calibration, Qt::Vertical);
-  splitDockWidget(calibration, faults, Qt::Vertical);
+  for (auto* d : {telemetry, faults}) {
+    addDockWidget(Qt::RightDockWidgetArea, d);
+    tabifyDockWidget(camera, d);
+  }
 
+  // Bottom group: events log and the timeline.
+  addDockWidget(Qt::BottomDockWidgetArea, events);
   addDockWidget(Qt::BottomDockWidgetArea, timeline);
-  timeline->setMinimumHeight(240);
+  tabifyDockWidget(events, timeline);
+  timeline->setMinimumHeight(200);
+
+  // Open each group on its primary tab.
+  robots->raise();
+  camera->raise();
+  events->raise();
+
+  // Give the 3D viewport the lion's share of width, like the VS editor area.
+  resizeDocks({robots, camera}, {340, 380}, Qt::Horizontal);
 }
 
 QDockWidget* StudioWindow::make_dock(const QString& title, QWidget* widget) {
@@ -311,6 +339,36 @@ void StudioWindow::refresh_io() {
   }
 }
 
+void StudioWindow::refresh_program() {
+  if (!program_list_ || !controller_) return;
+  program_list_->clear();
+  const QVariantList points = controller_->programPoints();
+  for (const QVariant& entry : points) {
+    const QVariantMap m = entry.toMap();
+    program_list_->addItem(QString("P%1   X %2  Y %3  Z %4")
+                               .arg(m.value("index").toInt())
+                               .arg(m.value("x").toDouble(), 7, 'f', 1)
+                               .arg(m.value("y").toDouble(), 7, 'f', 1)
+                               .arg(m.value("z").toDouble(), 7, 'f', 1));
+  }
+}
+
+void StudioWindow::update_pendant() {
+  if (!pendant_lcd_ || !controller_) return;
+  const QVariantList c = controller_->tcpCoords();
+  const auto v = [&](int i) { return c.size() > i ? c[i].toDouble() : 0.0; };
+  const auto col = [](double x) { return QString::number(x, 'f', 1).rightJustified(8); };
+
+  const QString text =
+      QString("  %1 FRAME        %2\n").arg(controller_->coordSystem().toUpper()).arg(controller_->programState().toUpper()) +
+      QString("  X %1   Rx %2\n").arg(col(v(0))).arg(col(v(3))) +
+      QString("  Y %1   Ry %2\n").arg(col(v(1))).arg(col(v(4))) +
+      QString("  Z %1   Rz %2\n").arg(col(v(2))).arg(col(v(5))) +
+      QString("  ------------------------------\n") +
+      QString("  step: %1").arg(controller_->stepLabel());
+  pendant_lcd_->setText(text);
+}
+
 QWidget* StudioWindow::make_session_panel() {
   auto* panel = new QWidget;
   auto* layout = new QFormLayout(panel);
@@ -383,7 +441,24 @@ QWidget* StudioWindow::make_jog_panel() {
   constexpr double kDeg5 = 5.0 * 3.14159265358979323846 / 180.0;  // 5° in radians
 
   auto* panel = new QWidget;
+  panel->setObjectName("pendant");
   auto* layout = new QVBoxLayout(panel);
+  layout->setContentsMargins(10, 10, 10, 10);
+
+  // Pendant header + LCD read-out: the live TCP pose, coordinate system, active
+  // tool and program state, like the screen at the top of a real teach pendant.
+  auto* title = new QLabel("TEACH PENDANT");
+  title->setObjectName("pendantTitle");
+  title->setAlignment(Qt::AlignCenter);
+  layout->addWidget(title);
+
+  pendant_lcd_ = new QLabel;
+  pendant_lcd_->setObjectName("pendantLcd");
+  pendant_lcd_->setTextFormat(Qt::PlainText);
+  pendant_lcd_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+  layout->addWidget(pendant_lcd_);
+
+  layout->addWidget(horizontal_rule());
 
   // Coordinate system for Cartesian jog: World / Base / Tool / User.
   auto* frame_row = new QHBoxLayout;
@@ -493,11 +568,35 @@ QWidget* StudioWindow::make_jog_panel() {
   layout->addLayout(tool_btns);
 
   layout->addWidget(horizontal_rule());
+
+  // Program: teach the current TCP pose as a point, then run the points as a
+  // straight-line (MoveL) program on the twin — job authoring in miniature.
+  layout->addWidget(new QLabel("Program (teach & run)"));
+  program_list_ = new QListWidget;
+  program_list_->setMaximumHeight(110);
+  layout->addWidget(program_list_);
+
+  auto* prog_btns = new QHBoxLayout;
+  auto* teach = new QPushButton("Teach point");
+  auto* run_prog = new QPushButton("Run");
+  auto* clear_prog = new QPushButton("Clear");
+  connect(teach, &QPushButton::clicked, this, [this] { controller_->teachPoint(); });
+  connect(run_prog, &QPushButton::clicked, this, [this] { controller_->runProgram(); });
+  connect(clear_prog, &QPushButton::clicked, this, [this] { controller_->clearProgram(); });
+  prog_btns->addWidget(teach);
+  prog_btns->addWidget(run_prog);
+  prog_btns->addWidget(clear_prog);
+  layout->addLayout(prog_btns);
+
+  layout->addWidget(horizontal_rule());
   auto* home = new QPushButton("Jog Home");
+  auto* arc = new QPushButton("Arc (MoveC)");
   auto* demo = new QPushButton("Run Demo");
   connect(home, &QPushButton::clicked, this, [this] { controller_->jogHome(); });
+  connect(arc, &QPushButton::clicked, this, [this] { controller_->jogArc(); });
   connect(demo, &QPushButton::clicked, this, [this] { controller_->runDemo(); });
   layout->addWidget(home);
+  layout->addWidget(arc);
   layout->addWidget(demo);
   layout->addStretch();
 
@@ -573,5 +672,52 @@ void StudioWindow::apply_theme() {
     QLabel {
       color: #d7e1ea;
     }
+    /* Visual-Studio-like tool-window tabs at the top of each dock group. */
+    QTabBar::tab {
+      background: #141c25;
+      color: #9fb0c0;
+      border: 1px solid #2b3947;
+      border-bottom: none;
+      padding: 6px 14px;
+      margin-right: 2px;
+    }
+    QTabBar::tab:selected {
+      background: #1d2937;
+      color: #e6ecf2;
+      border-top: 2px solid #2f8cff;
+    }
+    QTabBar::tab:hover {
+      color: #e6ecf2;
+    }
+    /* Teach-pendant look: a dark bezel with an LCD read-out. */
+    QWidget#pendant {
+      background: #0d1117;
+      border: 1px solid #2b3947;
+      border-radius: 8px;
+    }
+    QLabel#pendantTitle {
+      color: #6f8296;
+      font-weight: bold;
+      letter-spacing: 3px;
+      padding: 2px 0;
+    }
+    QLabel#pendantLcd {
+      background: #06120e;
+      color: #46f0a0;                 /* LCD green */
+      border: 1px solid #123326;
+      border-radius: 4px;
+      padding: 8px;
+      font-family: "Menlo", "Consolas", monospace;
+      font-size: 13px;
+    }
+    QWidget#pendant QPushButton {
+      background: #1a2430;
+      border: 1px solid #33465a;
+      border-radius: 5px;
+      padding: 7px 10px;
+      font-weight: bold;
+    }
+    QWidget#pendant QPushButton:hover { border-color: #4d9dff; }
+    QWidget#pendant QPushButton:pressed { background: #223247; }
   )qss");
 }

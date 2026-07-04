@@ -302,7 +302,8 @@ class MockController final : public sdk::ControllerAdapter {
       }
 
       const bool weld = command.weld && command.weld->enabled;
-      task_.assign(knots.size() - 1, command);  // one program-step per sub-segment
+      task_ = {command};                              // one program step (the arc)
+      seg_cmd_.assign(knots.size() - 1, 0);           // every sub-segment maps to it
       weld_active_.assign(knots.size() - 1, static_cast<char>(weld ? 1 : 0));
       waypoints_ = std::move(knots);
       starts_.assign(durations_.size() + 1, 0.0);
@@ -351,6 +352,7 @@ class MockController final : public sdk::ControllerAdapter {
     }
 
     task_ = {command};
+    seg_cmd_ = {0};
     waypoints_ = {std::move(start), std::move(target)};
     durations_ = {dur};
     weld_active_ = {0};
@@ -374,7 +376,7 @@ class MockController final : public sdk::ControllerAdapter {
     const std::int64_t now_ns = now.nanoseconds();
     if (!started_) {
       s.joint_positions = waypoints_.empty() ? std::vector<double>(dof(), 0.0) : waypoints_.front();
-      finish_frame(s, 0, 0.0);
+      finish_frame(s, 0, 0, 0.0);
       return s;
     }
     if (!started_clock_) { start_ns_ = now_ns; last_ns_ = now_ns; started_clock_ = true; }
@@ -382,18 +384,18 @@ class MockController final : public sdk::ControllerAdapter {
       start_ns_ += (now_ns - last_ns_);  // freeze elapsed time
       last_ns_ = now_ns;
       s.joint_positions = sample_joints(frozen_t_, frozen_step_);
-      finish_frame(s, frozen_step_, 0.0);
+      finish_frame(s, seg_to_cmd(frozen_step_), frozen_step_, 0.0);
       return s;
     }
     last_ns_ = now_ns;
     const double t = static_cast<double>(now_ns - start_ns_) * 1e-9;
     frozen_t_ = t;
 
-    int step = 0;
+    int seg = 0;
     double moving = 0.0;
     if (t >= total_s_) {
       s.joint_positions = waypoints_.back();
-      step = static_cast<int>(task_.size()) - 1;
+      seg = static_cast<int>(durations_.size()) - 1;  // last schedule segment
       state_ = machine::ProgramState::Completed;
       s.program_state = state_;
       if (!completed_emitted_) {
@@ -401,21 +403,22 @@ class MockController final : public sdk::ControllerAdapter {
         completed_emitted_ = true;
       }
     } else {
-      s.joint_positions = sample_joints(t, step);
-      moving = is_motion_step(step) ? 1.0 : 0.0;
+      s.joint_positions = sample_joints(t, seg);
+      moving = is_motion_step(seg_to_cmd(seg)) ? 1.0 : 0.0;
     }
-    frozen_step_ = step;
+    frozen_step_ = seg;
+    const int cmd = seg_to_cmd(seg);
 
-    // step-boundary events
-    if (step != last_step_ && state_ != machine::ProgramState::Completed) {
+    // step-boundary events fire per command / program line, not per arc sub-segment.
+    if (cmd != last_step_ && state_ != machine::ProgramState::Completed) {
       if (last_step_ >= 0)
         s.events.push_back({now, machine::EventKind::StepCompleted, machine::Severity::Info,
                             "Step done: " + step_label(last_step_)});
       s.events.push_back({now, machine::EventKind::StepStarted, machine::Severity::Info,
-                          "Step: " + step_label(step)});
-      last_step_ = step;
+                          "Step: " + step_label(cmd)});
+      last_step_ = cmd;
     }
-    finish_frame(s, step, moving);
+    finish_frame(s, cmd, seg, moving);
     return s;
   }
 
@@ -436,38 +439,87 @@ class MockController final : public sdk::ControllerAdapter {
     return k == machine::MotionKind::MoveJ || k == machine::MotionKind::MoveL || k == machine::MotionKind::MoveC;
   }
 
+  // Map a schedule segment to the task command it belongs to (a MoveC expands to
+  // several segments that all share one command / program line).
+  [[nodiscard]] int seg_to_cmd(int seg) const {
+    if (seg >= 0 && seg < static_cast<int>(seg_cmd_.size())) return seg_cmd_[static_cast<std::size_t>(seg)];
+    return static_cast<int>(task_.size()) - 1;
+  }
+
+  [[nodiscard]] static double cart_dist_m(const core::Vec3& a, const core::Vec3& b) {
+    return std::sqrt((a.x_m - b.x_m) * (a.x_m - b.x_m) + (a.y_m - b.y_m) * (a.y_m - b.y_m) +
+                     (a.z_m - b.z_m) * (a.z_m - b.z_m));
+  }
+
   void rebuild_schedule() {
     waypoints_.clear();
     durations_.clear();
     starts_.clear();
     weld_active_.clear();
+    seg_cmd_.clear();
 
+    const core::Pose3D tool = tools_.current_offset();
     std::vector<double> current(dof(), 0.0);
     waypoints_.push_back(current);
     bool weld_on = false;
-    for (const auto& cmd : task_) {
-      std::vector<double> next = current;
-      double dur = 0.1;
+
+    // Append one schedule segment ending at `next`, taking `dur` seconds, belonging
+    // to command `ci`.
+    const auto push_seg = [&](const std::vector<double>& next, double dur, std::size_t ci) {
+      durations_.push_back(dur);
+      weld_active_.push_back(static_cast<char>(weld_on ? 1 : 0));
+      waypoints_.push_back(next);
+      seg_cmd_.push_back(static_cast<int>(ci));
+    };
+
+    for (std::size_t ci = 0; ci < task_.size(); ++ci) {
+      const auto& cmd = task_[ci];
       if (cmd.kind == machine::MotionKind::MoveJ && cmd.target.joints) {
-        next = *cmd.target.joints;
+        std::vector<double> next = *cmd.target.joints;
         next.resize(dof(), 0.0);
         double max_delta = 0.0;
         for (std::size_t i = 0; i < dof(); ++i) max_delta = std::max(max_delta, std::abs(next[i] - current[i]));
         const double speed = cmd.speed > 0 ? cmd.speed : deg(60);
-        dur = std::max(0.1, max_delta / speed);
-      } else if (cmd.kind == machine::MotionKind::MoveL || cmd.kind == machine::MotionKind::MoveC) {
-        dur = 1.0;  // pose targets: real joints come from the controller
+        push_seg(next, std::max(0.1, max_delta / speed), ci);
+        current = next;
+      } else if (cmd.kind == machine::MotionKind::MoveL && cmd.target.pose) {
+        // Straight-line Cartesian move: IK the target from the current pose.
+        const machine::IkResult ik = machine::inverse_kinematics(profile_.axes, *cmd.target.pose, current, tool);
+        std::vector<double> next = ik.converged ? ik.joints : current;
+        next.resize(dof(), 0.0);
+        const core::Pose3D cur_pose = machine::forward_kinematics(profile_.axes, current, tool).tcp;
+        const double dist_m = cart_dist_m(cmd.target.pose->position_m, cur_pose.position_m);
+        const double speed_mm_s = cmd.speed > 0 ? cmd.speed : 50.0;
+        push_seg(next, std::max(0.1, dist_m * 1000.0 / speed_mm_s), ci);
+        current = next;
+      } else if (cmd.kind == machine::MotionKind::MoveC && cmd.target.pose) {
+        // Circular arc start -> via -> end, expanded into sub-segments (all sharing
+        // this command index) with IK along the path.
+        const core::Pose3D start_pose = machine::forward_kinematics(profile_.axes, current, tool).tcp;
+        const core::Pose3D via = cmd.via ? *cmd.via : start_pose;
+        const machine::ArcPath arc = machine::sample_arc(start_pose, via, *cmd.target.pose, 13);
+        const double speed_mm_s = cmd.speed > 0 ? cmd.speed : 50.0;
+        std::vector<double> seed = current;
+        for (std::size_t i = 1; i < arc.poses.size(); ++i) {
+          const machine::IkResult ik = machine::inverse_kinematics(profile_.axes, arc.poses[i], seed, tool);
+          std::vector<double> next = ik.converged ? ik.joints : seed;
+          next.resize(dof(), 0.0);
+          const double seg_m = cart_dist_m(arc.poses[i].position_m, arc.poses[i - 1].position_m);
+          push_seg(next, std::max(0.02, seg_m * 1000.0 / speed_mm_s), ci);
+          seed = std::move(next);
+        }
+        current = seed;
       } else if (cmd.kind == machine::MotionKind::Wait) {
-        dur = std::max(0.0, cmd.wait_s);
+        push_seg(current, std::max(0.0, cmd.wait_s), ci);
       } else if (cmd.kind == machine::MotionKind::ToolOn) {
-        weld_on = true; dur = 0.15;
+        weld_on = true;
+        push_seg(current, 0.15, ci);
       } else if (cmd.kind == machine::MotionKind::ToolOff) {
-        weld_on = false; dur = 0.15;
+        weld_on = false;
+        push_seg(current, 0.15, ci);
+      } else {
+        push_seg(current, 0.1, ci);  // unknown / no-op step
       }
-      durations_.push_back(dur);
-      weld_active_.push_back(weld_on);
-      waypoints_.push_back(next);
-      current = next;
     }
     starts_.assign(durations_.size() + 1, 0.0);
     for (std::size_t i = 0; i < durations_.size(); ++i) starts_[i + 1] = starts_[i] + durations_[i];
@@ -488,9 +540,9 @@ class MockController final : public sdk::ControllerAdapter {
     return out;
   }
 
-  void finish_frame(sdk::RobotState& s, int step, double moving) const {
-    s.current_step = step;
-    s.current_step_label = step_label(step);
+  void finish_frame(sdk::RobotState& s, int cmd, int seg, double moving) const {
+    s.current_step = cmd;
+    s.current_step_label = step_label(cmd);
     s.speed_fraction = moving;
 
     const auto fk = machine::forward_kinematics(profile_.axes, s.joint_positions, tools_.current_offset());
@@ -499,7 +551,7 @@ class MockController final : public sdk::ControllerAdapter {
     // The GP25 weld process drives its own signals while welding; other channels
     // (and every channel on a non-welding robot like the PNR) hold whatever was
     // last written through write_io. Report the IO map in the profile's order.
-    const bool weld = step >= 0 && step < static_cast<int>(weld_active_.size()) && weld_active_[static_cast<std::size_t>(step)];
+    const bool weld = seg >= 0 && seg < static_cast<int>(weld_active_.size()) && weld_active_[static_cast<std::size_t>(seg)];
     if (io_.count("weld_on")) {
       io_["weld_on"] = weld ? 1.0 : 0.0;
       io_["gas_on"] = weld ? 1.0 : 0.0;
@@ -529,6 +581,7 @@ class MockController final : public sdk::ControllerAdapter {
   std::vector<double> durations_;
   std::vector<double> starts_;
   std::vector<char> weld_active_;
+  std::vector<int> seg_cmd_;  // schedule segment -> task command index (MoveC expands to many)
   double total_s_{0.0};
   mutable std::vector<double> last_joints_;  // last reported pose, so a jog starts from it
   mutable std::map<std::string, double> io_;  // live IO values (written + process-driven)

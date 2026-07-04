@@ -32,6 +32,10 @@ class RobotController final : public QObject {
   Q_PROPERTY(double speedFraction READ speedFraction NOTIFY telemetryChanged)
   Q_PROPERTY(bool weldActive READ weldActive NOTIFY telemetryChanged)
   Q_PROPERTY(QVariantList tcpPosition READ tcpPosition NOTIFY telemetryChanged)
+  // TCP readout in the selected coordinate system: [X, Y, Z (mm), Rx, Ry, Rz (deg)],
+  // plus the coordinate-system name — for the viewport overlay and the pendant.
+  Q_PROPERTY(QVariantList tcpCoords READ tcpCoords NOTIFY telemetryChanged)
+  Q_PROPERTY(QString coordSystem READ coordSystem NOTIFY telemetryChanged)
 
  public:
   explicit RobotController(QObject* parent = nullptr);
@@ -43,6 +47,8 @@ class RobotController final : public QObject {
   [[nodiscard]] double speedFraction() const { return speed_fraction_; }
   [[nodiscard]] bool weldActive() const { return weld_active_; }
   [[nodiscard]] QVariantList tcpPosition() const { return tcp_position_; }
+  [[nodiscard]] QVariantList tcpCoords() const { return tcp_coords_; }
+  [[nodiscard]] QString coordSystem() const { return coord_system_name_; }
 
   Q_INVOKABLE void start();
   Q_INVOKABLE void pause();
@@ -57,6 +63,9 @@ class RobotController final : public QObject {
   // solved through IK. Translation and rotation components are independent.
   Q_INVOKABLE void jogCartesian(double dx_m, double dy_m, double dz_m,
                                 double drx_rad, double dry_rad, double drz_rad);
+  // Run a short circular arc (MoveC) from the current TCP through an offset via to
+  // an offset end, so the arc motion is visible in the scene.
+  Q_INVOKABLE void jogArc();
   Q_INVOKABLE void setCoordinateSystem(int system);        // 0 World, 1 Base, 2 Tool, 3 User
   Q_INVOKABLE void setSpeedMmS(double mm_s);               // Cartesian jog speed
   Q_INVOKABLE void selectTool(int slot);                   // choose the active tool
@@ -64,6 +73,14 @@ class RobotController final : public QObject {
   Q_INVOKABLE void clearTool(int slot);
   Q_INVOKABLE void runDemo();                              // leave manual mode, resume the demo
   Q_INVOKABLE bool saveSession(const QString& path);
+
+  // Teach-and-run programs: capture the current TCP pose as a program point, then
+  // run the captured points as a straight-line (MoveL) program through the same
+  // controller. The building block for authoring robot jobs on the digital twin.
+  Q_INVOKABLE void teachPoint();
+  Q_INVOKABLE void clearProgram();
+  Q_INVOKABLE void runProgram();
+  Q_INVOKABLE QVariantList programPoints() const;  // [{index, x, y, z} (mm), ...]
 
   // Robot registry (the universal-SDK seam): list saved robots, save the currently
   // connected one under a name, load a saved robot (reconnecting through its
@@ -86,6 +103,7 @@ class RobotController final : public QObject {
   void eventLogged(const QString& text);
   void phaseChanged(const QString& phase);
   void robotsChanged();
+  void programChanged();
 
  private:
   void tick();
@@ -108,12 +126,15 @@ class RobotController final : public QObject {
   cavr::machine::CoordinateSystem coord_sys_{cavr::machine::CoordinateSystem::Base};
   double speed_mm_s_{50.0};  // Cartesian jog speed
   cavr::runtime::SessionManager manager_;
+  std::vector<cavr::core::Pose3D> program_points_;  // taught TCP poses (MoveL targets)
   QTimer timer_;
   std::int64_t now_ns_{1'000'000'000};
   int run_index_{0};
 
   QVariantList joint_degrees_;
   QVariantList tcp_position_;
+  QVariantList tcp_coords_;                 // [X,Y,Z mm, Rx,Ry,Rz deg] in coord_sys_
+  QString coord_system_name_{"Base"};
   QString phase_{"disconnected"};
   QString program_state_{"idle"};
   QString step_label_{"idle"};

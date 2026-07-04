@@ -161,6 +161,50 @@ Item {
         }
     }
 
+    // ---- TCP coordinate read-out, overlaid at the top-centre of the view ----
+    Rectangle {
+        id: tcpOverlay
+        visible: root.useTelemetry
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.top: parent.top
+        anchors.topMargin: 12
+        radius: 6
+        color: "#d90b1016"
+        border.color: "#2b3947"
+        border.width: 1
+        implicitWidth: coordColumn.implicitWidth + 26
+        implicitHeight: coordColumn.implicitHeight + 14
+
+        property var c: root.useTelemetry ? robot.tcpCoords : [0, 0, 0, 0, 0, 0]
+        function val(i) { return (c && c.length > i) ? c[i] : 0 }
+        function fmt(v) { return (v >= 0 ? " " : "") + v.toFixed(1) }
+
+        Column {
+            id: coordColumn
+            anchors.centerIn: parent
+            spacing: 4
+
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "TCP  ·  " + (root.useTelemetry ? robot.coordSystem : "Base")
+                      + " frame  ·  mm / deg"
+                color: "#7fa9d8"
+                font.pixelSize: 11
+                font.family: "Menlo, monospace"
+            }
+            Row {
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: 16
+                Text { text: "X" + tcpOverlay.fmt(tcpOverlay.val(0)); color: "#e6ecf2"; font.pixelSize: 14; font.family: "Menlo, monospace" }
+                Text { text: "Y" + tcpOverlay.fmt(tcpOverlay.val(1)); color: "#e6ecf2"; font.pixelSize: 14; font.family: "Menlo, monospace" }
+                Text { text: "Z" + tcpOverlay.fmt(tcpOverlay.val(2)); color: "#e6ecf2"; font.pixelSize: 14; font.family: "Menlo, monospace" }
+                Text { text: "Rx" + tcpOverlay.fmt(tcpOverlay.val(3)); color: "#f0b866"; font.pixelSize: 14; font.family: "Menlo, monospace" }
+                Text { text: "Ry" + tcpOverlay.fmt(tcpOverlay.val(4)); color: "#f0b866"; font.pixelSize: 14; font.family: "Menlo, monospace" }
+                Text { text: "Rz" + tcpOverlay.fmt(tcpOverlay.val(5)); color: "#f0b866"; font.pixelSize: 14; font.family: "Menlo, monospace" }
+            }
+        }
+    }
+
     // ---- scene-graph helpers (RuntimeLoader drops glTF node names) ----
     function isNode(o) { return o.toString().indexOf("QQuick3DNode") === 0 }
     function isModel(o) { return o.toString().indexOf("QQuick3DModel") === 0 }
