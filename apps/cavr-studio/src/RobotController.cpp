@@ -33,6 +33,10 @@ constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
   const double yaw = std::atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z));
   return {roll * kRadToDeg, pitch * kRadToDeg, yaw * kRadToDeg};
 }
+
+// A stable, DB-friendly id from a display name (defined below; used by both the
+// robot registry and the program store).
+std::string slugify(const QString& name);
 }  // namespace
 
 RobotController::RobotController(QObject* parent) : QObject(parent) {
@@ -49,6 +53,15 @@ RobotController::RobotController(QObject* parent) : QObject(parent) {
     registry_.reset();
   }
   seed_default_robots();
+
+  // Program (job) registry lives beside the robot registry.
+  const std::string prog_path = (data_dir + "/program_registry.db").toStdString();
+  programs_ = std::make_unique<cavr::catalog::SqliteProgramStore>(
+      cavr::catalog::CatalogOpenOptions{prog_path, true});
+  if (auto status = programs_->initialize(); !status) {
+    emit eventLogged(QString("programs | init failed: ") + QString::fromStdString(status.error));
+    programs_.reset();
+  }
 
   connect(&timer_, &QTimer::timeout, this, &RobotController::tick);
 
@@ -327,65 +340,236 @@ bool RobotController::saveSession(const QString& path) {
   return cavr::runtime::save_session_log(manager_.log(), path.toStdString(), errors);
 }
 
-void RobotController::teachPoint() {
-  program_points_.push_back(manager_.latest().tcp_pose);
-  const auto& p = program_points_.back().position_m;
-  emit eventLogged(QString("program | taught P%1  (%2, %3, %4) mm")
-                       .arg(program_points_.size())
-                       .arg(p.x_m * 1000.0, 0, 'f', 1)
-                       .arg(p.y_m * 1000.0, 0, 'f', 1)
-                       .arg(p.z_m * 1000.0, 0, 'f', 1));
+namespace {
+// A short human summary of a step for the editor list.
+QString step_detail(const cavr::machine::MotionCommand& c) {
+  using cavr::machine::MotionKind;
+  switch (c.kind) {
+    case MotionKind::MoveJ:
+      return c.target.joints ? QString("%1 axes").arg(c.target.joints->size()) : "—";
+    case MotionKind::MoveL:
+    case MotionKind::MoveC: {
+      if (!c.target.pose) return "—";
+      const auto& p = c.target.pose->position_m;
+      QString s = QString("X%1 Y%2 Z%3")
+                      .arg(p.x_m * 1000.0, 0, 'f', 0)
+                      .arg(p.y_m * 1000.0, 0, 'f', 0)
+                      .arg(p.z_m * 1000.0, 0, 'f', 0);
+      if (c.kind == MotionKind::MoveC) s += " (arc)";
+      return s;
+    }
+    case MotionKind::Wait:
+      return QString("%1 s").arg(c.wait_s, 0, 'f', 1);
+    case MotionKind::ToolOn:
+    case MotionKind::ToolOff:
+      return c.label.empty() ? QString() : QString::fromStdString(c.label);
+  }
+  return {};
+}
+}  // namespace
+
+void RobotController::addMoveL() {
+  cavr::machine::MotionCommand ml;
+  ml.kind = cavr::machine::MotionKind::MoveL;
+  ml.target.pose = manager_.latest().tcp_pose;
+  ml.speed = speed_mm_s_;
+  ml.label = "MoveL";
+  current_program_.push_back(std::move(ml));
+  emit eventLogged("program | added MoveL (current pose)");
+  emit programChanged();
+}
+
+void RobotController::addMoveJ() {
+  cavr::machine::MotionCommand mj;
+  mj.kind = cavr::machine::MotionKind::MoveJ;
+  mj.target.joints = manager_.latest().joint_positions;
+  mj.speed = 45.0 * 3.14159265358979323846 / 180.0;  // rad/s
+  mj.label = "MoveJ";
+  current_program_.push_back(std::move(mj));
+  emit eventLogged("program | added MoveJ (current joints)");
+  emit programChanged();
+}
+
+void RobotController::setVia() {
+  pending_via_ = manager_.latest().tcp_pose;
+  emit eventLogged("program | via point stashed (next MoveC will arc through it)");
+}
+
+void RobotController::addMoveC() {
+  if (!pending_via_) {
+    emit eventLogged("program | set a via first (Set via), then Add MoveC");
+    return;
+  }
+  cavr::machine::MotionCommand mc;
+  mc.kind = cavr::machine::MotionKind::MoveC;
+  mc.via = *pending_via_;
+  mc.target.pose = manager_.latest().tcp_pose;
+  mc.speed = speed_mm_s_;
+  mc.label = "MoveC";
+  current_program_.push_back(std::move(mc));
+  pending_via_.reset();
+  emit eventLogged("program | added MoveC (arc via stashed point)");
+  emit programChanged();
+}
+
+void RobotController::addWait(double seconds) {
+  cavr::machine::MotionCommand w;
+  w.kind = cavr::machine::MotionKind::Wait;
+  w.wait_s = seconds > 0 ? seconds : 0.0;
+  w.label = "Wait";
+  current_program_.push_back(std::move(w));
+  emit eventLogged(QString("program | added Wait %1 s").arg(seconds));
+  emit programChanged();
+}
+
+void RobotController::addIoSet(const QString& channel, double value) {
+  // Modeled as a ToolOn/ToolOff-style step carrying the IO in its label; on run we
+  // apply it via write_io at that step. For simplicity we set it immediately and
+  // record a labelled Wait(0) marker so the program lists the action.
+  static_cast<void>(controller_->write_io(channel.toStdString(), value));
+  cavr::machine::MotionCommand io;
+  io.kind = cavr::machine::MotionKind::Wait;
+  io.wait_s = 0.0;
+  io.label = "IO " + channel.toStdString() + "=" + std::to_string(value);
+  current_program_.push_back(std::move(io));
+  emit eventLogged(QString("program | added IO set %1=%2").arg(channel).arg(value));
+  emit programChanged();
+}
+
+void RobotController::addToolOn() {
+  cavr::machine::MotionCommand c;
+  c.kind = cavr::machine::MotionKind::ToolOn;
+  c.label = "ToolOn";
+  current_program_.push_back(std::move(c));
+  emit eventLogged("program | added ToolOn");
+  emit programChanged();
+}
+
+void RobotController::addToolOff() {
+  cavr::machine::MotionCommand c;
+  c.kind = cavr::machine::MotionKind::ToolOff;
+  c.label = "ToolOff";
+  current_program_.push_back(std::move(c));
+  emit eventLogged("program | added ToolOff");
+  emit programChanged();
+}
+
+void RobotController::removeStep(int index) {
+  if (index < 0 || index >= static_cast<int>(current_program_.size())) return;
+  current_program_.erase(current_program_.begin() + index);
+  emit programChanged();
+}
+
+void RobotController::moveStep(int index, int delta) {
+  const int target = index + delta;
+  if (index < 0 || index >= static_cast<int>(current_program_.size())) return;
+  if (target < 0 || target >= static_cast<int>(current_program_.size())) return;
+  std::swap(current_program_[static_cast<std::size_t>(index)],
+            current_program_[static_cast<std::size_t>(target)]);
   emit programChanged();
 }
 
 void RobotController::clearProgram() {
-  program_points_.clear();
+  current_program_.clear();
+  pending_via_.reset();
   emit eventLogged("program | cleared");
   emit programChanged();
 }
 
 void RobotController::runProgram() {
-  if (program_points_.empty()) {
-    emit eventLogged("program | no taught points to run");
+  if (current_program_.empty()) {
+    emit eventLogged("program | empty, nothing to run");
     return;
   }
-  // Build a straight-line (MoveL) program through the taught points and run it via
-  // the SessionManager — the same connect/plan/validate/execute path as the demo.
   cavr::runtime::Timeline plan;
   cavr::runtime::OperationStep step;
   step.id = 0;
   step.kind = cavr::runtime::OperationKind::RobotMotion;
-  step.label = "taught program";
-  for (std::size_t i = 0; i < program_points_.size(); ++i) {
-    cavr::machine::MotionCommand ml;
-    ml.kind = cavr::machine::MotionKind::MoveL;
-    ml.target.pose = program_points_[i];
-    ml.speed = speed_mm_s_;  // mm/s
-    ml.label = "P" + std::to_string(i + 1);
-    step.motion.push_back(std::move(ml));
-  }
+  step.label = "program";
+  step.motion = current_program_;  // run the authored steps as-is
   plan.steps.push_back(std::move(step));
 
   manual_ = false;
   manager_.set_plan(std::move(plan));
   static_cast<void>(manager_.validate());
   static_cast<void>(manager_.execute("studio_program_" + std::to_string(++run_index_)));
-  emit eventLogged(QString("program | running %1 points").arg(program_points_.size()));
+  emit eventLogged(QString("program | running %1 steps").arg(current_program_.size()));
   publish();
 }
 
-QVariantList RobotController::programPoints() const {
+QVariantList RobotController::programSteps() const {
   QVariantList out;
-  for (std::size_t i = 0; i < program_points_.size(); ++i) {
-    const auto& p = program_points_[i].position_m;
+  for (std::size_t i = 0; i < current_program_.size(); ++i) {
+    const auto& c = current_program_[i];
     QVariantMap m;
     m["index"] = static_cast<int>(i + 1);
-    m["x"] = p.x_m * 1000.0;
-    m["y"] = p.y_m * 1000.0;
-    m["z"] = p.z_m * 1000.0;
+    m["kind"] = QString::fromStdString(cavr::machine::to_string(c.kind));
+    m["detail"] = step_detail(c);
     out.push_back(m);
   }
   return out;
+}
+
+QVariantList RobotController::savedPrograms() const {
+  QVariantList out;
+  if (!programs_) return out;
+  for (const auto& p : programs_->list_programs()) {
+    QVariantMap m;
+    m["id"] = QString::fromStdString(p.id);
+    m["name"] = QString::fromStdString(p.name);
+    m["robot"] = QString::fromStdString(p.robot_id);
+    m["steps"] = static_cast<int>(p.task.size());
+    out.push_back(m);
+  }
+  return out;
+}
+
+void RobotController::saveProgram(const QString& name) {
+  if (!programs_) {
+    emit eventLogged("programs | store unavailable");
+    return;
+  }
+  if (current_program_.empty()) {
+    emit eventLogged("programs | nothing to save (empty program)");
+    return;
+  }
+  cavr::catalog::StoredProgram p;
+  // Reuse the robot slug helper for a stable id.
+  p.id = slugify(name);
+  p.name = name.trimmed().isEmpty() ? std::string("Unnamed job") : name.toStdString();
+  p.robot_id = manager_.profile().id;
+  p.task = current_program_;
+  p.updated_ns = now_ns_;
+  if (auto status = programs_->upsert_program(p); !status) {
+    emit eventLogged(QString("programs | save failed: ") + QString::fromStdString(status.error));
+    return;
+  }
+  emit eventLogged("programs | saved " + QString::fromStdString(p.name) + " (" +
+                   QString::fromStdString(p.id) + ")");
+  emit savedProgramsChanged();
+}
+
+void RobotController::loadProgram(const QString& id) {
+  if (!programs_) return;
+  const auto p = programs_->find_program(id.toStdString());
+  if (!p) {
+    emit eventLogged("programs | unknown program: " + id);
+    return;
+  }
+  current_program_ = p->task;
+  pending_via_.reset();
+  emit eventLogged("programs | loaded " + QString::fromStdString(p->name));
+  emit programChanged();
+}
+
+void RobotController::deleteProgram(const QString& id) {
+  if (!programs_) return;
+  if (auto status = programs_->delete_program(id.toStdString()); !status) {
+    emit eventLogged(QString("programs | delete failed: ") + QString::fromStdString(status.error));
+    return;
+  }
+  emit eventLogged("programs | deleted " + id);
+  emit savedProgramsChanged();
 }
 
 namespace {

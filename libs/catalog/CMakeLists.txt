@@ -21,6 +21,7 @@ enable_language(C)
 add_library(cavr_catalog STATIC
   src/sqlite_catalog.cpp
   src/sqlite_profile_store.cpp
+  src/sqlite_program_store.cpp
   ${CMAKE_SOURCE_DIR}/third_party/sqlite/sqlite3.c
 )
 add_library(CAVR::catalog ALIAS cavr_catalog)

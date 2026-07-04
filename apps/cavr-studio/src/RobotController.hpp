@@ -16,11 +16,14 @@
 #include <cavr/adapters/generic_tcp_robot/generic_tcp_controller.hpp>
 #include <cavr/adapters/mock_robot/mock_controller.hpp>
 #include <cavr/catalog/sqlite_profile_store.hpp>
+#include <cavr/catalog/sqlite_program_store.hpp>
 #include <cavr/machine/frames.hpp>
+#include <cavr/machine/motion.hpp>
 #include <cavr/runtime/session_manager.hpp>
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 class RobotController final : public QObject {
@@ -74,13 +77,28 @@ class RobotController final : public QObject {
   Q_INVOKABLE void runDemo();                              // leave manual mode, resume the demo
   Q_INVOKABLE bool saveSession(const QString& path);
 
-  // Teach-and-run programs: capture the current TCP pose as a program point, then
-  // run the captured points as a straight-line (MoveL) program through the same
-  // controller. The building block for authoring robot jobs on the digital twin.
-  Q_INVOKABLE void teachPoint();
+  // Program editor: build an ordered job of steps by teaching from the live robot,
+  // reorder/remove steps, run it on the twin, and save/load it by name in the DB —
+  // job authoring, mirroring the robot registry.
+  Q_INVOKABLE void addMoveL();                 // current TCP pose as a MoveL step
+  Q_INVOKABLE void addMoveJ();                 // current joints as a MoveJ step
+  Q_INVOKABLE void setVia();                   // stash the current pose as the next MoveC via
+  Q_INVOKABLE void addMoveC();                 // arc through the stashed via to the current pose
+  Q_INVOKABLE void addWait(double seconds);
+  Q_INVOKABLE void addIoSet(const QString& channel, double value);
+  Q_INVOKABLE void addToolOn();
+  Q_INVOKABLE void addToolOff();
+  Q_INVOKABLE void removeStep(int index);
+  Q_INVOKABLE void moveStep(int index, int delta);  // reorder: -1 up, +1 down
   Q_INVOKABLE void clearProgram();
   Q_INVOKABLE void runProgram();
-  Q_INVOKABLE QVariantList programPoints() const;  // [{index, x, y, z} (mm), ...]
+  Q_INVOKABLE QVariantList programSteps() const;    // [{index, kind, detail}]
+
+  // Saved jobs in the DB.
+  Q_INVOKABLE QVariantList savedPrograms() const;   // [{id, name, steps}]
+  Q_INVOKABLE void saveProgram(const QString& name);
+  Q_INVOKABLE void loadProgram(const QString& id);
+  Q_INVOKABLE void deleteProgram(const QString& id);
 
   // Robot registry (the universal-SDK seam): list saved robots, save the currently
   // connected one under a name, load a saved robot (reconnecting through its
@@ -103,7 +121,8 @@ class RobotController final : public QObject {
   void eventLogged(const QString& text);
   void phaseChanged(const QString& phase);
   void robotsChanged();
-  void programChanged();
+  void programChanged();          // the editable step list changed
+  void savedProgramsChanged();    // the DB list of saved jobs changed
 
  private:
   void tick();
@@ -121,12 +140,14 @@ class RobotController final : public QObject {
   // same either way, so the scene mirrors a real robot with no other changes.
   std::unique_ptr<cavr::adapter_sdk::ControllerAdapter> controller_;
   std::unique_ptr<cavr::catalog::SqliteProfileStore> registry_;  // named robots in SQLite
+  std::unique_ptr<cavr::catalog::SqliteProgramStore> programs_;  // named jobs in SQLite
   bool remote_{false};
   bool manual_{false};  // set by jogging; suppresses the demo auto-restart
   cavr::machine::CoordinateSystem coord_sys_{cavr::machine::CoordinateSystem::Base};
   double speed_mm_s_{50.0};  // Cartesian jog speed
   cavr::runtime::SessionManager manager_;
-  std::vector<cavr::core::Pose3D> program_points_;  // taught TCP poses (MoveL targets)
+  cavr::machine::MotionTask current_program_;        // the editable job (ordered steps)
+  std::optional<cavr::core::Pose3D> pending_via_;    // stashed via for the next MoveC
   QTimer timer_;
   std::int64_t now_ns_{1'000'000'000};
   int run_index_{0};

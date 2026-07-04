@@ -4,6 +4,8 @@
 #include "RobotController.hpp"
 #include "TimelineWidget.hpp"
 
+#include <functional>
+
 #include <QAction>
 #include <QQmlContext>
 #include <QQuickWidget>
@@ -14,6 +16,7 @@
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QFrame>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -73,14 +76,18 @@ StudioWindow::StudioWindow(QWidget* parent) : QMainWindow(parent) {
   });
   // Registry changes (save/load/delete) repopulate the robot list + IO table.
   connect(controller_, &RobotController::robotsChanged, this, [this] { refresh_robots(); });
-  // Teaching / clearing program points repopulates the program list.
+  // Editing the program repopulates the step list; DB changes the saved-jobs list.
   connect(controller_, &RobotController::programChanged, this, [this] { refresh_program(); });
+  connect(controller_, &RobotController::savedProgramsChanged, this,
+          [this] { refresh_saved_programs(); });
   // Each telemetry tick refreshes the live IO values and the pendant read-out.
   connect(controller_, &RobotController::telemetryChanged, this, [this] {
     refresh_io();
     update_pendant();
   });
   refresh_robots();
+  refresh_program();
+  refresh_saved_programs();
   update_pendant();
 }
 
@@ -133,6 +140,7 @@ void StudioWindow::create_docks() {
 
   auto* robots = make_dock("Robots", make_robots_panel());
   auto* jog = make_dock("Jog + Tools", make_jog_panel());
+  auto* program = make_dock("Program", make_program_panel());
   auto* session = make_dock("Session", make_session_panel());
   auto* channels = make_dock("Channels", make_channels_panel());
   auto* calibration = make_dock("Calibration", make_calibration_panel());
@@ -146,7 +154,7 @@ void StudioWindow::create_docks() {
 
   // Left group: robot registry, jog/tools, session, channels, calibration.
   addDockWidget(Qt::LeftDockWidgetArea, robots);
-  for (auto* d : {jog, session, channels, calibration}) {
+  for (auto* d : {jog, program, session, channels, calibration}) {
     addDockWidget(Qt::LeftDockWidgetArea, d);
     tabifyDockWidget(robots, d);
   }
@@ -339,17 +347,139 @@ void StudioWindow::refresh_io() {
   }
 }
 
+QWidget* StudioWindow::make_program_panel() {
+  auto* panel = new QWidget;
+  auto* layout = new QVBoxLayout(panel);
+
+  // The editable job: an ordered list of steps taught from the live robot.
+  layout->addWidget(new QLabel("Program steps"));
+  program_list_ = new QListWidget;
+  layout->addWidget(program_list_);
+
+  // Add-step buttons: teach motion from the current pose/joints, or insert
+  // Wait/Tool steps. MoveC needs a via first (Set via), then Add MoveC.
+  auto* add_grid = new QGridLayout;
+  const struct {
+    const char* label;
+    std::function<void()> action;
+  } adders[] = {
+      {"+ MoveJ", [this] { controller_->addMoveJ(); }},
+      {"+ MoveL", [this] { controller_->addMoveL(); }},
+      {"Set via", [this] { controller_->setVia(); }},
+      {"+ MoveC", [this] { controller_->addMoveC(); }},
+      {"+ ToolOn", [this] { controller_->addToolOn(); }},
+      {"+ ToolOff", [this] { controller_->addToolOff(); }},
+  };
+  int gi = 0;
+  for (const auto& a : adders) {
+    auto* b = new QPushButton(a.label);
+    const auto act = a.action;
+    connect(b, &QPushButton::clicked, this, [act] { act(); });
+    add_grid->addWidget(b, gi / 2, gi % 2);
+    ++gi;
+  }
+  layout->addLayout(add_grid);
+
+  // Wait step with a seconds spin.
+  auto* wait_row = new QHBoxLayout;
+  auto* wait_spin = new QDoubleSpinBox;
+  wait_spin->setRange(0.0, 60.0);
+  wait_spin->setValue(1.0);
+  wait_spin->setSuffix(" s");
+  auto* add_wait = new QPushButton("+ Wait");
+  connect(add_wait, &QPushButton::clicked, this,
+          [this, wait_spin] { controller_->addWait(wait_spin->value()); });
+  wait_row->addWidget(wait_spin);
+  wait_row->addWidget(add_wait);
+  layout->addLayout(wait_row);
+
+  // Reorder / remove / clear / run.
+  auto* ops = new QHBoxLayout;
+  auto* up = new QPushButton("↑");
+  auto* down = new QPushButton("↓");
+  auto* remove = new QPushButton("Remove");
+  auto* clear = new QPushButton("Clear");
+  connect(up, &QPushButton::clicked, this, [this] {
+    if (auto* it = program_list_->currentItem()) controller_->moveStep(program_list_->row(it), -1);
+  });
+  connect(down, &QPushButton::clicked, this, [this] {
+    if (auto* it = program_list_->currentItem()) controller_->moveStep(program_list_->row(it), +1);
+  });
+  connect(remove, &QPushButton::clicked, this, [this] {
+    if (auto* it = program_list_->currentItem()) controller_->removeStep(program_list_->row(it));
+  });
+  connect(clear, &QPushButton::clicked, this, [this] { controller_->clearProgram(); });
+  ops->addWidget(up);
+  ops->addWidget(down);
+  ops->addWidget(remove);
+  ops->addWidget(clear);
+  layout->addLayout(ops);
+
+  auto* run = new QPushButton("▶ Run program");
+  connect(run, &QPushButton::clicked, this, [this] { controller_->runProgram(); });
+  layout->addWidget(run);
+
+  layout->addWidget(horizontal_rule());
+
+  // Save / load named jobs from the DB (mirrors the robot registry).
+  layout->addWidget(new QLabel("Saved jobs"));
+  saved_programs_list_ = new QListWidget;
+  saved_programs_list_->setMaximumHeight(120);
+  layout->addWidget(saved_programs_list_);
+
+  auto* save_row = new QHBoxLayout;
+  program_name_ = new QLineEdit;
+  program_name_->setPlaceholderText("Job name");
+  auto* save = new QPushButton("Save");
+  connect(save, &QPushButton::clicked, this,
+          [this] { controller_->saveProgram(program_name_->text()); });
+  save_row->addWidget(program_name_, 1);
+  save_row->addWidget(save);
+  layout->addLayout(save_row);
+
+  auto* db_ops = new QHBoxLayout;
+  auto* load = new QPushButton("Load");
+  auto* del = new QPushButton("Delete");
+  connect(load, &QPushButton::clicked, this, [this] {
+    if (auto* it = saved_programs_list_->currentItem())
+      controller_->loadProgram(it->data(Qt::UserRole).toString());
+  });
+  connect(del, &QPushButton::clicked, this, [this] {
+    if (auto* it = saved_programs_list_->currentItem())
+      controller_->deleteProgram(it->data(Qt::UserRole).toString());
+  });
+  db_ops->addWidget(load);
+  db_ops->addWidget(del);
+  layout->addLayout(db_ops);
+
+  auto* scroll = new QScrollArea;
+  scroll->setWidget(panel);
+  scroll->setWidgetResizable(true);
+  scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  return scroll;
+}
+
 void StudioWindow::refresh_program() {
   if (!program_list_ || !controller_) return;
   program_list_->clear();
-  const QVariantList points = controller_->programPoints();
-  for (const QVariant& entry : points) {
+  for (const QVariant& entry : controller_->programSteps()) {
     const QVariantMap m = entry.toMap();
-    program_list_->addItem(QString("P%1   X %2  Y %3  Z %4")
-                               .arg(m.value("index").toInt())
-                               .arg(m.value("x").toDouble(), 7, 'f', 1)
-                               .arg(m.value("y").toDouble(), 7, 'f', 1)
-                               .arg(m.value("z").toDouble(), 7, 'f', 1));
+    program_list_->addItem(QString("%1.  %2   %3")
+                               .arg(m.value("index").toInt(), 2)
+                               .arg(m.value("kind").toString().toUpper(), -8)
+                               .arg(m.value("detail").toString()));
+  }
+}
+
+void StudioWindow::refresh_saved_programs() {
+  if (!saved_programs_list_ || !controller_) return;
+  saved_programs_list_->clear();
+  for (const QVariant& entry : controller_->savedPrograms()) {
+    const QVariantMap m = entry.toMap();
+    auto* item = new QListWidgetItem(
+        QString("%1  (%2 steps)").arg(m.value("name").toString()).arg(m.value("steps").toInt()),
+        saved_programs_list_);
+    item->setData(Qt::UserRole, m.value("id"));
   }
 }
 
@@ -566,27 +696,6 @@ QWidget* StudioWindow::make_jog_panel() {
   tool_btns->addWidget(calibrate);
   tool_btns->addWidget(clear_tool);
   layout->addLayout(tool_btns);
-
-  layout->addWidget(horizontal_rule());
-
-  // Program: teach the current TCP pose as a point, then run the points as a
-  // straight-line (MoveL) program on the twin — job authoring in miniature.
-  layout->addWidget(new QLabel("Program (teach & run)"));
-  program_list_ = new QListWidget;
-  program_list_->setMaximumHeight(110);
-  layout->addWidget(program_list_);
-
-  auto* prog_btns = new QHBoxLayout;
-  auto* teach = new QPushButton("Teach point");
-  auto* run_prog = new QPushButton("Run");
-  auto* clear_prog = new QPushButton("Clear");
-  connect(teach, &QPushButton::clicked, this, [this] { controller_->teachPoint(); });
-  connect(run_prog, &QPushButton::clicked, this, [this] { controller_->runProgram(); });
-  connect(clear_prog, &QPushButton::clicked, this, [this] { controller_->clearProgram(); });
-  prog_btns->addWidget(teach);
-  prog_btns->addWidget(run_prog);
-  prog_btns->addWidget(clear_prog);
-  layout->addLayout(prog_btns);
 
   layout->addWidget(horizontal_rule());
   auto* home = new QPushButton("Jog Home");
