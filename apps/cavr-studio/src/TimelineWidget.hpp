@@ -1,16 +1,20 @@
 #pragma once
 
-#include <QTimer>
+#include <QRect>
+#include <QVector>
 #include <QWidget>
+
+class RobotController;
 
 class TimelineWidget final : public QWidget {
  public:
-  explicit TimelineWidget(QWidget* parent = nullptr);
+  explicit TimelineWidget(RobotController* controller, QWidget* parent = nullptr);
 
  protected:
   void paintEvent(QPaintEvent* event) override;
+  void mousePressEvent(QMouseEvent* event) override;
 
  private:
-  QTimer timer_;
-  double playhead_{0.56};
+  RobotController* controller_{nullptr};
+  QVector<QPair<QRect, int>> hit_blocks_;
 };

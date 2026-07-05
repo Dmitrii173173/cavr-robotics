@@ -11,6 +11,8 @@ set(CMAKE_AUTOMOC ON)
 add_executable(cavr-studio
   src/CameraView.cpp
   src/CameraView.hpp
+  src/ProgramDocument.cpp
+  src/ProgramDocument.hpp
   src/RobotController.cpp
   src/RobotController.hpp
   src/StudioWindow.cpp

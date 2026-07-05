@@ -210,6 +210,7 @@ void RobotController::jogHome() {
   cmd.speed = 45.0 * 3.14159265358979323846 / 180.0;                // 45 deg/s
   cmd.label = "jog home";
   manual_ = true;
+  running_current_program_ = false;
   static_cast<void>(controller_->move_to(cmd));
   publish();
 }
@@ -228,6 +229,7 @@ void RobotController::jogJoint(int axis, double delta_deg) {
   cmd.speed = 45.0 * 3.14159265358979323846 / 180.0;
   cmd.label = "jog joint";
   manual_ = true;
+  running_current_program_ = false;
   static_cast<void>(controller_->move_to(cmd));
   publish();
 }
@@ -253,6 +255,7 @@ void RobotController::jogCartesian(double dx_m, double dy_m, double dz_m,
   cmd.speed = speed_mm_s_;  // mm/s
   cmd.label = "jog cartesian";
   manual_ = true;
+  running_current_program_ = false;
   if (!controller_->move_to(cmd)) {
     emit eventLogged("jog cartesian | target unreachable (IK did not converge)");
   }
@@ -276,6 +279,7 @@ void RobotController::jogArc() {
   cmd.speed = speed_mm_s_;  // mm/s
   cmd.label = "jog arc (MoveC)";
   manual_ = true;
+  running_current_program_ = false;
   if (!controller_->move_to(cmd)) {
     emit eventLogged("jog arc | target unreachable (IK did not converge)");
   }
@@ -325,6 +329,7 @@ void RobotController::clearTool(int slot) {
 
 void RobotController::runDemo() {
   manual_ = false;
+  running_current_program_ = false;
   manager_.set_plan(cavr::runtime::make_demo_plan());
   static_cast<void>(manager_.validate());
   static_cast<void>(manager_.execute("studio_session_" + std::to_string(++run_index_)));
@@ -374,8 +379,10 @@ void RobotController::addMoveL() {
   ml.target.pose = manager_.latest().tcp_pose;
   ml.speed = speed_mm_s_;
   ml.label = "MoveL";
-  current_program_.push_back(std::move(ml));
+  program_.append(std::move(ml));
+  running_current_program_ = false;
   emit eventLogged("program | added MoveL (current pose)");
+  emit programSelectionChanged();
   emit programChanged();
 }
 
@@ -385,30 +392,34 @@ void RobotController::addMoveJ() {
   mj.target.joints = manager_.latest().joint_positions;
   mj.speed = 45.0 * 3.14159265358979323846 / 180.0;  // rad/s
   mj.label = "MoveJ";
-  current_program_.push_back(std::move(mj));
+  program_.append(std::move(mj));
+  running_current_program_ = false;
   emit eventLogged("program | added MoveJ (current joints)");
+  emit programSelectionChanged();
   emit programChanged();
 }
 
 void RobotController::setVia() {
-  pending_via_ = manager_.latest().tcp_pose;
+  program_.set_pending_via(manager_.latest().tcp_pose);
   emit eventLogged("program | via point stashed (next MoveC will arc through it)");
 }
 
 void RobotController::addMoveC() {
-  if (!pending_via_) {
+  auto via = program_.take_pending_via();
+  if (!via) {
     emit eventLogged("program | set a via first (Set via), then Add MoveC");
     return;
   }
   cavr::machine::MotionCommand mc;
   mc.kind = cavr::machine::MotionKind::MoveC;
-  mc.via = *pending_via_;
+  mc.via = *via;
   mc.target.pose = manager_.latest().tcp_pose;
   mc.speed = speed_mm_s_;
   mc.label = "MoveC";
-  current_program_.push_back(std::move(mc));
-  pending_via_.reset();
+  program_.append(std::move(mc));
+  running_current_program_ = false;
   emit eventLogged("program | added MoveC (arc via stashed point)");
+  emit programSelectionChanged();
   emit programChanged();
 }
 
@@ -417,8 +428,10 @@ void RobotController::addWait(double seconds) {
   w.kind = cavr::machine::MotionKind::Wait;
   w.wait_s = seconds > 0 ? seconds : 0.0;
   w.label = "Wait";
-  current_program_.push_back(std::move(w));
+  program_.append(std::move(w));
+  running_current_program_ = false;
   emit eventLogged(QString("program | added Wait %1 s").arg(seconds));
+  emit programSelectionChanged();
   emit programChanged();
 }
 
@@ -431,8 +444,10 @@ void RobotController::addIoSet(const QString& channel, double value) {
   io.kind = cavr::machine::MotionKind::Wait;
   io.wait_s = 0.0;
   io.label = "IO " + channel.toStdString() + "=" + std::to_string(value);
-  current_program_.push_back(std::move(io));
+  program_.append(std::move(io));
+  running_current_program_ = false;
   emit eventLogged(QString("program | added IO set %1=%2").arg(channel).arg(value));
+  emit programSelectionChanged();
   emit programChanged();
 }
 
@@ -440,8 +455,10 @@ void RobotController::addToolOn() {
   cavr::machine::MotionCommand c;
   c.kind = cavr::machine::MotionKind::ToolOn;
   c.label = "ToolOn";
-  current_program_.push_back(std::move(c));
+  program_.append(std::move(c));
+  running_current_program_ = false;
   emit eventLogged("program | added ToolOn");
+  emit programSelectionChanged();
   emit programChanged();
 }
 
@@ -449,65 +466,82 @@ void RobotController::addToolOff() {
   cavr::machine::MotionCommand c;
   c.kind = cavr::machine::MotionKind::ToolOff;
   c.label = "ToolOff";
-  current_program_.push_back(std::move(c));
+  program_.append(std::move(c));
+  running_current_program_ = false;
   emit eventLogged("program | added ToolOff");
+  emit programSelectionChanged();
   emit programChanged();
 }
 
 void RobotController::removeStep(int index) {
-  if (index < 0 || index >= static_cast<int>(current_program_.size())) return;
-  current_program_.erase(current_program_.begin() + index);
+  if (!program_.remove_step(index)) return;
+  emit programSelectionChanged();
   emit programChanged();
 }
 
 void RobotController::moveStep(int index, int delta) {
-  const int target = index + delta;
-  if (index < 0 || index >= static_cast<int>(current_program_.size())) return;
-  if (target < 0 || target >= static_cast<int>(current_program_.size())) return;
-  std::swap(current_program_[static_cast<std::size_t>(index)],
-            current_program_[static_cast<std::size_t>(target)]);
+  if (!program_.move_step(index, delta)) return;
+  emit programSelectionChanged();
   emit programChanged();
 }
 
 void RobotController::clearProgram() {
-  current_program_.clear();
-  pending_via_.reset();
+  program_.clear();
+  running_current_program_ = false;
   emit eventLogged("program | cleared");
+  emit programSelectionChanged();
   emit programChanged();
 }
 
 void RobotController::runProgram() {
-  if (current_program_.empty()) {
+  if (program_.empty()) {
     emit eventLogged("program | empty, nothing to run");
     return;
   }
-  cavr::runtime::Timeline plan;
-  cavr::runtime::OperationStep step;
-  step.id = 0;
-  step.kind = cavr::runtime::OperationKind::RobotMotion;
-  step.label = "program";
-  step.motion = current_program_;  // run the authored steps as-is
-  plan.steps.push_back(std::move(step));
 
   manual_ = false;
-  manager_.set_plan(std::move(plan));
+  running_current_program_ = true;
+  manager_.set_plan(program_.to_timeline());
   static_cast<void>(manager_.validate());
   static_cast<void>(manager_.execute("studio_program_" + std::to_string(++run_index_)));
-  emit eventLogged(QString("program | running %1 steps").arg(current_program_.size()));
+  emit eventLogged(QString("program | running %1 steps").arg(program_.size()));
   publish();
 }
 
 QVariantList RobotController::programSteps() const {
   QVariantList out;
-  for (std::size_t i = 0; i < current_program_.size(); ++i) {
-    const auto& c = current_program_[i];
+  const int active = running_current_program_ ? manager_.latest().current_step : -1;
+  const cavr::machine::MotionTask& task = program_.task();
+  for (std::size_t i = 0; i < task.size(); ++i) {
+    const auto& c = task[i];
     QVariantMap m;
     m["index"] = static_cast<int>(i + 1);
+    m["zeroIndex"] = static_cast<int>(i);
     m["kind"] = QString::fromStdString(cavr::machine::to_string(c.kind));
     m["detail"] = step_detail(c);
+    m["label"] = QString::fromStdString(c.label);
+    m["speed"] = c.speed;
+    m["blend"] = c.blend_radius_m;
+    m["wait"] = c.wait_s;
+    m["selected"] = program_.selected_step() == static_cast<int>(i);
+    m["active"] = active == static_cast<int>(i);
+    m["duration"] = c.kind == cavr::machine::MotionKind::Wait
+                        ? std::max(0.15, c.wait_s)
+                        : (c.kind == cavr::machine::MotionKind::ToolOn ||
+                           c.kind == cavr::machine::MotionKind::ToolOff)
+                              ? 0.25
+                              : 1.0;
     out.push_back(m);
   }
   return out;
+}
+
+void RobotController::selectProgramStep(int index) {
+  const int before = program_.selected_step();
+  program_.select_step(index);
+  if (program_.selected_step() == before) return;
+  emit programSelectionChanged();
+  emit programChanged();
 }
 
 QVariantList RobotController::savedPrograms() const {
@@ -529,7 +563,7 @@ void RobotController::saveProgram(const QString& name) {
     emit eventLogged("programs | store unavailable");
     return;
   }
-  if (current_program_.empty()) {
+  if (program_.empty()) {
     emit eventLogged("programs | nothing to save (empty program)");
     return;
   }
@@ -538,7 +572,7 @@ void RobotController::saveProgram(const QString& name) {
   p.id = slugify(name);
   p.name = name.trimmed().isEmpty() ? std::string("Unnamed job") : name.toStdString();
   p.robot_id = manager_.profile().id;
-  p.task = current_program_;
+  p.task = program_.task();
   p.updated_ns = now_ns_;
   if (auto status = programs_->upsert_program(p); !status) {
     emit eventLogged(QString("programs | save failed: ") + QString::fromStdString(status.error));
@@ -556,9 +590,9 @@ void RobotController::loadProgram(const QString& id) {
     emit eventLogged("programs | unknown program: " + id);
     return;
   }
-  current_program_ = p->task;
-  pending_via_.reset();
+  program_.set_task(p->task);
   emit eventLogged("programs | loaded " + QString::fromStdString(p->name));
+  emit programSelectionChanged();
   emit programChanged();
 }
 

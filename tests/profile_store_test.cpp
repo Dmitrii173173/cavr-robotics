@@ -167,8 +167,10 @@ int main() {
   {
     const auto path = temp_db("cavr_registry_contract.db");
     std::filesystem::remove(path);
-    catalog::SqliteProfileStore store({path.string(), true});
-    run_contract(store, "sqlite");
+    {
+      catalog::SqliteProfileStore store({path.string(), true});
+      run_contract(store, "sqlite");
+    }
     std::filesystem::remove(path);
   }
   test_sqlite_persistence();

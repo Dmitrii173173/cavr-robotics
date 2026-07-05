@@ -129,8 +129,10 @@ std::filesystem::path temp_db(std::string_view name) {
 void test_sqlite_contract() {
   const auto path = temp_db("cavr_catalog_contract.db");
   std::filesystem::remove(path);
-  catalog::SqliteCatalog cat({path.string(), true});
-  run_contract(cat, "sqlite");
+  {
+    catalog::SqliteCatalog cat({path.string(), true});
+    run_contract(cat, "sqlite");
+  }
   std::filesystem::remove(path);
 }
 
@@ -167,10 +169,12 @@ void test_sqlite_future_version_rejected() {
                nullptr, nullptr, nullptr);
   sqlite3_close(raw);
 
-  catalog::SqliteCatalog cat({path.string(), true});
-  const auto status = cat.initialize();
-  check(!status.ok, "sqlite: future schema version is rejected");
-  check(status.error.find("version") != std::string::npos, "sqlite: rejection names the version");
+  {
+    catalog::SqliteCatalog cat({path.string(), true});
+    const auto status = cat.initialize();
+    check(!status.ok, "sqlite: future schema version is rejected");
+    check(status.error.find("version") != std::string::npos, "sqlite: rejection names the version");
+  }
 
   std::filesystem::remove(path);
 }

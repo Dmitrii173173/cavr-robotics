@@ -1,4 +1,4 @@
-#include "StudioWindow.hpp"
+﻿#include "StudioWindow.hpp"
 
 #include "CameraView.hpp"
 #include "RobotController.hpp"
@@ -13,6 +13,7 @@
 #include <QComboBox>
 #include <QDockWidget>
 #include <QScrollArea>
+#include <QSignalBlocker>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QFrame>
@@ -78,6 +79,7 @@ StudioWindow::StudioWindow(QWidget* parent) : QMainWindow(parent) {
   connect(controller_, &RobotController::robotsChanged, this, [this] { refresh_robots(); });
   // Editing the program repopulates the step list; DB changes the saved-jobs list.
   connect(controller_, &RobotController::programChanged, this, [this] { refresh_program(); });
+  connect(controller_, &RobotController::programSelectionChanged, this, [this] { refresh_program(); });
   connect(controller_, &RobotController::savedProgramsChanged, this,
           [this] { refresh_saved_programs(); });
   // Each telemetry tick refreshes the live IO values and the pendant read-out.
@@ -118,8 +120,8 @@ void StudioWindow::configure_chrome() {
   toolbar->addAction("Validate");
   toolbar->addAction("Inspect");
   toolbar->addSeparator();
-  // Live jog (scene -> robot): commands the robot — in-process mock or, with
-  // CAVR_ROBOT_ENDPOINT set, a remote one — to move home right now.
+  // Live jog (scene -> robot): commands the robot вЂ” in-process mock or, with
+  // CAVR_ROBOT_ENDPOINT set, a remote one вЂ” to move home right now.
   auto* jog = toolbar->addAction("Jog Home");
   connect(jog, &QAction::triggered, this, [this] { controller_->jogHome(); });
   toolbar->addSeparator();
@@ -150,7 +152,7 @@ void StudioWindow::create_docks() {
   auto* faults = make_dock("Faults", make_fault_panel());
 
   auto* events = make_dock("Events", make_events_panel());
-  auto* timeline = make_dock("Timeline", new TimelineWidget(this));
+  auto* timeline = make_dock("Timeline", new TimelineWidget(controller_, this));
 
   // Left group: robot registry, jog/tools, session, channels, calibration.
   addDockWidget(Qt::LeftDockWidgetArea, robots);
@@ -238,7 +240,7 @@ QWidget* StudioWindow::make_robots_panel() {
   form->addRow("Endpoint", robot_endpoint_);
   layout->addLayout(form);
 
-  auto* save = new QPushButton("Save current as…");
+  auto* save = new QPushButton("Save current asвЂ¦");
   connect(save, &QPushButton::clicked, this, [this] {
     controller_->saveRobot(robot_name_->text(), robot_adapter_->currentText(),
                            robot_endpoint_->text());
@@ -301,7 +303,7 @@ void StudioWindow::refresh_robots() {
   const QVariantList robots = controller_->robotList();
   for (const QVariant& entry : robots) {
     const QVariantMap m = entry.toMap();
-    const QString label = QString("%1  —  %2  (%3 axes, %4 IO)")
+    const QString label = QString("%1  вЂ”  %2  (%3 axes, %4 IO)")
                               .arg(m.value("name").toString(), m.value("model").toString())
                               .arg(m.value("dof").toInt())
                               .arg(m.value("ioCount").toInt());
@@ -355,6 +357,8 @@ QWidget* StudioWindow::make_program_panel() {
   layout->addWidget(new QLabel("Program steps"));
   program_list_ = new QListWidget;
   layout->addWidget(program_list_);
+  connect(program_list_, &QListWidget::currentRowChanged, this,
+          [this](int row) { controller_->selectProgramStep(row); });
 
   // Add-step buttons: teach motion from the current pose/joints, or insert
   // Wait/Tool steps. MoveC needs a via first (Set via), then Add MoveC.
@@ -395,8 +399,8 @@ QWidget* StudioWindow::make_program_panel() {
 
   // Reorder / remove / clear / run.
   auto* ops = new QHBoxLayout;
-  auto* up = new QPushButton("↑");
-  auto* down = new QPushButton("↓");
+  auto* up = new QPushButton("в†‘");
+  auto* down = new QPushButton("в†“");
   auto* remove = new QPushButton("Remove");
   auto* clear = new QPushButton("Clear");
   connect(up, &QPushButton::clicked, this, [this] {
@@ -415,7 +419,7 @@ QWidget* StudioWindow::make_program_panel() {
   ops->addWidget(clear);
   layout->addLayout(ops);
 
-  auto* run = new QPushButton("▶ Run program");
+  auto* run = new QPushButton("в–¶ Run program");
   connect(run, &QPushButton::clicked, this, [this] { controller_->runProgram(); });
   layout->addWidget(run);
 
@@ -461,13 +465,19 @@ QWidget* StudioWindow::make_program_panel() {
 
 void StudioWindow::refresh_program() {
   if (!program_list_ || !controller_) return;
+  const QSignalBlocker blocker(program_list_);
   program_list_->clear();
   for (const QVariant& entry : controller_->programSteps()) {
     const QVariantMap m = entry.toMap();
-    program_list_->addItem(QString("%1.  %2   %3")
-                               .arg(m.value("index").toInt(), 2)
-                               .arg(m.value("kind").toString().toUpper(), -8)
-                               .arg(m.value("detail").toString()));
+    QString prefix = m.value("active").toBool() ? "в–¶ " : "  ";
+    if (m.value("selected").toBool()) prefix = "в—Џ ";
+    auto* item = new QListWidgetItem(
+        prefix + QString("%1.  %2   %3")
+                     .arg(m.value("index").toInt(), 2)
+                     .arg(m.value("kind").toString().toUpper(), -8)
+                     .arg(m.value("detail").toString()),
+        program_list_);
+    if (m.value("selected").toBool()) program_list_->setCurrentItem(item);
   }
 }
 
@@ -568,155 +578,246 @@ QWidget* StudioWindow::make_calibration_panel() {
 }
 
 QWidget* StudioWindow::make_jog_panel() {
-  constexpr double kDeg5 = 5.0 * 3.14159265358979323846 / 180.0;  // 5° in radians
+  {
+    constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
 
-  auto* panel = new QWidget;
-  panel->setObjectName("pendant");
-  auto* layout = new QVBoxLayout(panel);
-  layout->setContentsMargins(10, 10, 10, 10);
+    auto* panel = new QWidget;
+    panel->setObjectName("pendant");
+    auto* layout = new QVBoxLayout(panel);
+    layout->setContentsMargins(10, 10, 10, 10);
 
-  // Pendant header + LCD read-out: the live TCP pose, coordinate system, active
-  // tool and program state, like the screen at the top of a real teach pendant.
-  auto* title = new QLabel("TEACH PENDANT");
-  title->setObjectName("pendantTitle");
-  title->setAlignment(Qt::AlignCenter);
-  layout->addWidget(title);
+    const auto add_section = [&](const QString& text) {
+      auto* label = new QLabel(text);
+      label->setObjectName("sectionLabel");
+      layout->addWidget(label);
+    };
 
-  pendant_lcd_ = new QLabel;
-  pendant_lcd_->setObjectName("pendantLcd");
-  pendant_lcd_->setTextFormat(Qt::PlainText);
-  pendant_lcd_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-  layout->addWidget(pendant_lcd_);
+    auto* title = new QLabel("TEACH PENDANT");
+    title->setObjectName("pendantTitle");
+    title->setAlignment(Qt::AlignCenter);
+    layout->addWidget(title);
 
-  layout->addWidget(horizontal_rule());
+    pendant_lcd_ = new QLabel;
+    pendant_lcd_->setObjectName("pendantLcd");
+    pendant_lcd_->setTextFormat(Qt::PlainText);
+    pendant_lcd_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    layout->addWidget(pendant_lcd_);
 
-  // Coordinate system for Cartesian jog: World / Base / Tool / User.
-  auto* frame_row = new QHBoxLayout;
-  frame_row->addWidget(new QLabel("Frame"));
-  auto* frame = new QComboBox;
-  frame->addItems({"World", "Base", "Tool", "User"});
-  frame->setCurrentIndex(1);  // Base
-  connect(frame, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-          [this](int i) { controller_->setCoordinateSystem(i); });
-  frame_row->addWidget(frame);
-  layout->addLayout(frame_row);
+    layout->addWidget(horizontal_rule());
+    add_section("1. LIVE MANUAL JOG");
+    auto* mode_hint = new QLabel("Manual moves go to the robot now. Use low step sizes near fixtures.");
+    mode_hint->setObjectName("hintLabel");
+    mode_hint->setWordWrap(true);
+    layout->addWidget(mode_hint);
 
-  // Cartesian jog speed, in mm/s.
-  auto* speed_row = new QHBoxLayout;
-  speed_row->addWidget(new QLabel("Speed mm/s"));
-  auto* speed = new QDoubleSpinBox;
-  speed->setRange(1.0, 2000.0);
-  speed->setValue(50.0);
-  connect(speed, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
-          [this](double v) { controller_->setSpeedMmS(v); });
-  speed_row->addWidget(speed);
-  layout->addLayout(speed_row);
+    auto* frame_speed = new QGridLayout;
+    frame_speed->addWidget(new QLabel("Frame"), 0, 0);
+    auto* frame = new QComboBox;
+    frame->addItems({"World", "Base", "Tool", "User"});
+    frame->setCurrentIndex(1);
+    connect(frame, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int i) { controller_->setCoordinateSystem(i); });
+    frame_speed->addWidget(frame, 0, 1);
+    frame_speed->addWidget(new QLabel("Speed"), 0, 2);
+    auto* speed = new QDoubleSpinBox;
+    speed->setRange(1.0, 2000.0);
+    speed->setValue(50.0);
+    speed->setSuffix(" mm/s");
+    connect(speed, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+            [this](double v) { controller_->setSpeedMmS(v); });
+    frame_speed->addWidget(speed, 0, 3);
+    layout->addLayout(frame_speed);
 
-  layout->addWidget(horizontal_rule());
+    auto* safety_row = new QHBoxLayout;
+    auto* home = new QPushButton("Home");
+    auto* pause = new QPushButton("Hold");
+    auto* resume = new QPushButton("Resume");
+    auto* stop = new QPushButton("Stop");
+    home->setObjectName("primaryButton");
+    stop->setObjectName("dangerButton");
+    connect(home, &QPushButton::clicked, this, [this] { controller_->jogHome(); });
+    connect(pause, &QPushButton::clicked, this, [this] { controller_->pause(); });
+    connect(resume, &QPushButton::clicked, this, [this] { controller_->resume(); });
+    connect(stop, &QPushButton::clicked, this, [this] { controller_->stop(); });
+    for (auto* b : {home, pause, resume, stop}) safety_row->addWidget(b);
+    layout->addLayout(safety_row);
 
-  // Per-axis joint jog: each row is  name  [ - ]  [ + ].
-  layout->addWidget(new QLabel("Joint jog (±5°)"));
-  const QStringList axes = {"S", "L", "U", "R", "B", "T"};
-  for (int i = 0; i < axes.size(); ++i) {
-    auto* row = new QHBoxLayout;
-    row->addWidget(new QLabel(axes[i]));
-    auto* minus = new QPushButton("−");
-    auto* plus = new QPushButton("+");
-    connect(minus, &QPushButton::clicked, this, [this, i] { controller_->jogJoint(i, -5.0); });
-    connect(plus, &QPushButton::clicked, this, [this, i] { controller_->jogJoint(i, 5.0); });
-    row->addWidget(minus);
-    row->addWidget(plus);
-    layout->addLayout(row);
+    auto* step_grid = new QGridLayout;
+    step_grid->addWidget(new QLabel("Joint step"), 0, 0);
+    auto* joint_step = new QComboBox;
+    for (double d : {0.1, 1.0, 5.0, 10.0}) joint_step->addItem(QString("%1 deg").arg(d), d);
+    joint_step->setCurrentIndex(2);
+    step_grid->addWidget(joint_step, 0, 1);
+    step_grid->addWidget(new QLabel("Linear step"), 0, 2);
+    auto* linear_step = new QComboBox;
+    for (double d : {1.0, 5.0, 10.0, 50.0}) linear_step->addItem(QString("%1 mm").arg(d), d);
+    linear_step->setCurrentIndex(3);
+    step_grid->addWidget(linear_step, 0, 3);
+    step_grid->addWidget(new QLabel("Rot step"), 1, 0);
+    auto* rot_step = new QComboBox;
+    for (double d : {0.5, 1.0, 5.0, 15.0}) rot_step->addItem(QString("%1 deg").arg(d), d);
+    rot_step->setCurrentIndex(2);
+    step_grid->addWidget(rot_step, 1, 1);
+    layout->addLayout(step_grid);
+
+    add_section("Joint jog");
+    const QStringList axes = {"S", "L", "U", "R", "B", "T"};
+    for (int i = 0; i < axes.size(); ++i) {
+      auto* row = new QHBoxLayout;
+      auto* axis = new QLabel(axes[i]);
+      axis->setMinimumWidth(28);
+      row->addWidget(axis);
+      auto* minus = new QPushButton("-");
+      auto* plus = new QPushButton("+");
+      connect(minus, &QPushButton::clicked, this,
+              [this, i, joint_step] { controller_->jogJoint(i, -joint_step->currentData().toDouble()); });
+      connect(plus, &QPushButton::clicked, this,
+              [this, i, joint_step] { controller_->jogJoint(i, joint_step->currentData().toDouble()); });
+      row->addWidget(minus);
+      row->addWidget(plus);
+      layout->addLayout(row);
+    }
+
+    add_section("Cartesian jog");
+    const struct {
+      const char* label;
+      int component;
+    } cart[] = {{"X", 0}, {"Y", 1}, {"Z", 2}, {"Rx", 3}, {"Ry", 4}, {"Rz", 5}};
+    for (const auto& c : cart) {
+      auto* row = new QHBoxLayout;
+      auto* label = new QLabel(c.label);
+      label->setMinimumWidth(28);
+      row->addWidget(label);
+      auto* minus = new QPushButton("-");
+      auto* plus = new QPushButton("+");
+      const int component = c.component;
+      const auto jog_cart = [this, component, linear_step, rot_step, kDegToRad](double sign) {
+        double tx = 0, ty = 0, tz = 0, rx = 0, ry = 0, rz = 0;
+        if (component < 3) {
+          const double m = sign * linear_step->currentData().toDouble() / 1000.0;
+          if (component == 0) tx = m;
+          if (component == 1) ty = m;
+          if (component == 2) tz = m;
+        } else {
+          const double r = sign * rot_step->currentData().toDouble() * kDegToRad;
+          if (component == 3) rx = r;
+          if (component == 4) ry = r;
+          if (component == 5) rz = r;
+        }
+        controller_->jogCartesian(tx, ty, tz, rx, ry, rz);
+      };
+      connect(minus, &QPushButton::clicked, this, [jog_cart] { jog_cart(-1.0); });
+      connect(plus, &QPushButton::clicked, this, [jog_cart] { jog_cart(1.0); });
+      row->addWidget(minus);
+      row->addWidget(plus);
+      layout->addLayout(row);
+    }
+
+    layout->addWidget(horizontal_rule());
+    add_section("2. TEACH TO TIMELINE");
+    auto* teach_hint = new QLabel("Teach reads the current robot pose and adds a program block. It does not move the robot.");
+    teach_hint->setObjectName("hintLabel");
+    teach_hint->setWordWrap(true);
+    layout->addWidget(teach_hint);
+
+    auto* teach_grid = new QGridLayout;
+    const struct {
+      const char* label;
+      const char* object;
+      std::function<void()> action;
+    } teach[] = {
+        {"Teach MoveJ", "teachButton", [this] { controller_->addMoveJ(); }},
+        {"Teach MoveL", "teachButton", [this] { controller_->addMoveL(); }},
+        {"Set Arc Via", "", [this] { controller_->setVia(); }},
+        {"Teach MoveC End", "teachButton", [this] { controller_->addMoveC(); }},
+        {"Tool On", "", [this] { controller_->addToolOn(); }},
+        {"Tool Off", "", [this] { controller_->addToolOff(); }},
+    };
+    const int teach_count = static_cast<int>(sizeof(teach) / sizeof(teach[0]));
+    for (int i = 0; i < teach_count; ++i) {
+      auto* b = new QPushButton(teach[i].label);
+      if (*teach[i].object) b->setObjectName(teach[i].object);
+      const auto action = teach[i].action;
+      connect(b, &QPushButton::clicked, this, [action] { action(); });
+      teach_grid->addWidget(b, i / 2, i % 2);
+    }
+    layout->addLayout(teach_grid);
+
+    auto* wait_row = new QHBoxLayout;
+    auto* wait = new QDoubleSpinBox;
+    wait->setRange(0.0, 60.0);
+    wait->setValue(1.0);
+    wait->setSuffix(" s");
+    auto* add_wait = new QPushButton("Teach Wait");
+    connect(add_wait, &QPushButton::clicked, this,
+            [this, wait] { controller_->addWait(wait->value()); });
+    wait_row->addWidget(wait);
+    wait_row->addWidget(add_wait);
+    layout->addLayout(wait_row);
+
+    auto* run_row = new QHBoxLayout;
+    auto* run_program = new QPushButton("Run Timeline");
+    run_program->setObjectName("primaryButton");
+    auto* clear_program = new QPushButton("Clear Timeline");
+    connect(run_program, &QPushButton::clicked, this, [this] { controller_->runProgram(); });
+    connect(clear_program, &QPushButton::clicked, this, [this] { controller_->clearProgram(); });
+    run_row->addWidget(run_program);
+    run_row->addWidget(clear_program);
+    layout->addLayout(run_row);
+
+    layout->addWidget(horizontal_rule());
+    add_section("3. TOOL TABLE / TCP");
+    auto* tool_row = new QHBoxLayout;
+    tool_row->addWidget(new QLabel("Active slot"));
+    auto* tool = new QComboBox;
+    for (int i = 0; i < 10; ++i) tool->addItem(QString::number(i));
+    connect(tool, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int i) { controller_->selectTool(i); });
+    tool_row->addWidget(tool);
+    layout->addLayout(tool_row);
+
+    auto* cal_row = new QHBoxLayout;
+    cal_row->addWidget(new QLabel("TCP m"));
+    auto make_tcp_spin = [](double init) {
+      auto* s = new QDoubleSpinBox;
+      s->setRange(-1.0, 1.0);
+      s->setSingleStep(0.01);
+      s->setDecimals(3);
+      s->setValue(init);
+      return s;
+    };
+    auto* tcp_x = make_tcp_spin(0.0);
+    auto* tcp_y = make_tcp_spin(0.0);
+    auto* tcp_z = make_tcp_spin(0.101);
+    cal_row->addWidget(tcp_x);
+    cal_row->addWidget(tcp_y);
+    cal_row->addWidget(tcp_z);
+    layout->addLayout(cal_row);
+
+    auto* tool_btns = new QHBoxLayout;
+    auto* calibrate = new QPushButton("Calibrate TCP");
+    auto* clear_tool = new QPushButton("Clear Slot");
+    connect(calibrate, &QPushButton::clicked, this, [this, tool, tcp_x, tcp_y, tcp_z] {
+      controller_->calibrateTool(tool->currentIndex(), tcp_x->value(), tcp_y->value(), tcp_z->value());
+    });
+    connect(clear_tool, &QPushButton::clicked, this,
+            [this, tool] { controller_->clearTool(tool->currentIndex()); });
+    tool_btns->addWidget(calibrate);
+    tool_btns->addWidget(clear_tool);
+    layout->addLayout(tool_btns);
+
+    auto* demo = new QPushButton("Run Demo Cycle");
+    connect(demo, &QPushButton::clicked, this, [this] { controller_->runDemo(); });
+    layout->addWidget(demo);
+    layout->addStretch();
+
+    auto* scroll = new QScrollArea;
+    scroll->setWidget(panel);
+    scroll->setWidgetResizable(true);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    return scroll;
   }
-
-  layout->addWidget(horizontal_rule());
-
-  // Cartesian jog in the selected frame: X/Y/Z (±5 cm) and Rx/Ry/Rz (±5°), IK-solved.
-  layout->addWidget(new QLabel("Cartesian jog (±5 cm / ±5°)"));
-  const struct {
-    const char* label;
-    double tx, ty, tz, rx, ry, rz;
-  } cart[] = {
-      {"X", 0.05, 0, 0, 0, 0, 0}, {"Y", 0, 0.05, 0, 0, 0, 0},   {"Z", 0, 0, 0.05, 0, 0, 0},
-      {"Rx", 0, 0, 0, kDeg5, 0, 0}, {"Ry", 0, 0, 0, 0, kDeg5, 0}, {"Rz", 0, 0, 0, 0, 0, kDeg5}};
-  for (const auto& c : cart) {
-    auto* row = new QHBoxLayout;
-    row->addWidget(new QLabel(c.label));
-    auto* minus = new QPushButton("−");
-    auto* plus = new QPushButton("+");
-    const double tx = c.tx, ty = c.ty, tz = c.tz, rx = c.rx, ry = c.ry, rz = c.rz;
-    connect(minus, &QPushButton::clicked, this,
-            [this, tx, ty, tz, rx, ry, rz] { controller_->jogCartesian(-tx, -ty, -tz, -rx, -ry, -rz); });
-    connect(plus, &QPushButton::clicked, this,
-            [this, tx, ty, tz, rx, ry, rz] { controller_->jogCartesian(tx, ty, tz, rx, ry, rz); });
-    row->addWidget(minus);
-    row->addWidget(plus);
-    layout->addLayout(row);
-  }
-
-  layout->addWidget(horizontal_rule());
-
-  // Tool table: select a slot (0–9) and calibrate its TCP offset or clear it.
-  layout->addWidget(new QLabel("Tools (10 slots)"));
-  auto* tool_row = new QHBoxLayout;
-  tool_row->addWidget(new QLabel("Slot"));
-  auto* tool = new QComboBox;
-  for (int i = 0; i < 10; ++i) tool->addItem(QString::number(i));
-  connect(tool, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-          [this](int i) { controller_->selectTool(i); });
-  tool_row->addWidget(tool);
-  layout->addLayout(tool_row);
-
-  auto* cal_row = new QHBoxLayout;
-  cal_row->addWidget(new QLabel("TCP"));
-  auto make_tcp_spin = [](double init) {
-    auto* s = new QDoubleSpinBox;
-    s->setRange(-1.0, 1.0);
-    s->setSingleStep(0.01);
-    s->setDecimals(3);
-    s->setValue(init);
-    return s;
-  };
-  auto* tcp_x = make_tcp_spin(0.0);
-  auto* tcp_y = make_tcp_spin(0.0);
-  auto* tcp_z = make_tcp_spin(0.101);
-  cal_row->addWidget(tcp_x);
-  cal_row->addWidget(tcp_y);
-  cal_row->addWidget(tcp_z);
-  layout->addLayout(cal_row);
-
-  auto* tool_btns = new QHBoxLayout;
-  auto* calibrate = new QPushButton("Calibrate");
-  auto* clear_tool = new QPushButton("Clear");
-  connect(calibrate, &QPushButton::clicked, this, [this, tool, tcp_x, tcp_y, tcp_z] {
-    controller_->calibrateTool(tool->currentIndex(), tcp_x->value(), tcp_y->value(), tcp_z->value());
-  });
-  connect(clear_tool, &QPushButton::clicked, this,
-          [this, tool] { controller_->clearTool(tool->currentIndex()); });
-  tool_btns->addWidget(calibrate);
-  tool_btns->addWidget(clear_tool);
-  layout->addLayout(tool_btns);
-
-  layout->addWidget(horizontal_rule());
-  auto* home = new QPushButton("Jog Home");
-  auto* arc = new QPushButton("Arc (MoveC)");
-  auto* demo = new QPushButton("Run Demo");
-  connect(home, &QPushButton::clicked, this, [this] { controller_->jogHome(); });
-  connect(arc, &QPushButton::clicked, this, [this] { controller_->jogArc(); });
-  connect(demo, &QPushButton::clicked, this, [this] { controller_->runDemo(); });
-  layout->addWidget(home);
-  layout->addWidget(arc);
-  layout->addWidget(demo);
-  layout->addStretch();
-
-  // The panel is tall; wrap it so it stays usable in a short dock.
-  auto* scroll = new QScrollArea;
-  scroll->setWidget(panel);
-  scroll->setWidgetResizable(true);
-  scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  return scroll;
 }
-
 QWidget* StudioWindow::make_fault_panel() {
   auto* panel = new QWidget;
   auto* layout = new QVBoxLayout(panel);
@@ -810,6 +911,17 @@ void StudioWindow::apply_theme() {
       letter-spacing: 3px;
       padding: 2px 0;
     }
+    QLabel#sectionLabel {
+      color: #f2f7ff;
+      font-weight: 700;
+      padding: 8px 0 3px 0;
+      border-top: 1px solid #243241;
+    }
+    QLabel#hintLabel {
+      color: #8fa4b8;
+      font-size: 12px;
+      padding: 0 0 4px 0;
+    }
     QLabel#pendantLcd {
       background: #06120e;
       color: #46f0a0;                 /* LCD green */
@@ -828,5 +940,20 @@ void StudioWindow::apply_theme() {
     }
     QWidget#pendant QPushButton:hover { border-color: #4d9dff; }
     QWidget#pendant QPushButton:pressed { background: #223247; }
+    QWidget#pendant QPushButton#primaryButton {
+      background: #1167d8;
+      border-color: #5aa8ff;
+      color: #ffffff;
+    }
+    QWidget#pendant QPushButton#teachButton {
+      background: #0f5a3a;
+      border-color: #38d07f;
+      color: #eafff3;
+    }
+    QWidget#pendant QPushButton#dangerButton {
+      background: #5c1f24;
+      border-color: #ff5a66;
+      color: #ffe8ea;
+    }
   )qss");
 }

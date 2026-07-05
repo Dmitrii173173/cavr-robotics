@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ProgramDocument.hpp"
+
 // Bridge between the runtime session layer and the Qt/QML UI. It drives the demo
 // welding workflow through a SessionManager + mock controller and republishes the
 // live telemetry (joint angles, program state, current step, weld, events) as Qt
@@ -23,7 +25,6 @@
 
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <string>
 
 class RobotController final : public QObject {
@@ -39,6 +40,7 @@ class RobotController final : public QObject {
   // plus the coordinate-system name — for the viewport overlay and the pendant.
   Q_PROPERTY(QVariantList tcpCoords READ tcpCoords NOTIFY telemetryChanged)
   Q_PROPERTY(QString coordSystem READ coordSystem NOTIFY telemetryChanged)
+  Q_PROPERTY(int selectedProgramStep READ selectedProgramStep NOTIFY programSelectionChanged)
 
  public:
   explicit RobotController(QObject* parent = nullptr);
@@ -52,6 +54,7 @@ class RobotController final : public QObject {
   [[nodiscard]] QVariantList tcpPosition() const { return tcp_position_; }
   [[nodiscard]] QVariantList tcpCoords() const { return tcp_coords_; }
   [[nodiscard]] QString coordSystem() const { return coord_system_name_; }
+  [[nodiscard]] int selectedProgramStep() const { return program_.selected_step(); }
 
   Q_INVOKABLE void start();
   Q_INVOKABLE void pause();
@@ -93,6 +96,7 @@ class RobotController final : public QObject {
   Q_INVOKABLE void clearProgram();
   Q_INVOKABLE void runProgram();
   Q_INVOKABLE QVariantList programSteps() const;    // [{index, kind, detail}]
+  Q_INVOKABLE void selectProgramStep(int index);
 
   // Saved jobs in the DB.
   Q_INVOKABLE QVariantList savedPrograms() const;   // [{id, name, steps}]
@@ -123,6 +127,7 @@ class RobotController final : public QObject {
   void robotsChanged();
   void programChanged();          // the editable step list changed
   void savedProgramsChanged();    // the DB list of saved jobs changed
+  void programSelectionChanged();  // selected step in list/timeline changed
 
  private:
   void tick();
@@ -146,8 +151,8 @@ class RobotController final : public QObject {
   cavr::machine::CoordinateSystem coord_sys_{cavr::machine::CoordinateSystem::Base};
   double speed_mm_s_{50.0};  // Cartesian jog speed
   cavr::runtime::SessionManager manager_;
-  cavr::machine::MotionTask current_program_;        // the editable job (ordered steps)
-  std::optional<cavr::core::Pose3D> pending_via_;    // stashed via for the next MoveC
+  ProgramDocument program_;
+  bool running_current_program_{false};
   QTimer timer_;
   std::int64_t now_ns_{1'000'000'000};
   int run_index_{0};

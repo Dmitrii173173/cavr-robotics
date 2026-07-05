@@ -159,9 +159,11 @@ void test_index_into_catalog() {
   std::cerr << "[runtime_catalog_index_test] opening sqlite catalog\n";
   const auto db = temp_path("cavr_catalog_index.db");
   std::filesystem::remove(db);
-  catalog::SqliteCatalog sqlite({db.string(), true});
-  std::cerr << "[runtime_catalog_index_test] storing into sqlite catalog\n";
-  store_and_check(sqlite, entry, summary, "sqlite");
+  {
+    catalog::SqliteCatalog sqlite({db.string(), true});
+    std::cerr << "[runtime_catalog_index_test] storing into sqlite catalog\n";
+    store_and_check(sqlite, entry, summary, "sqlite");
+  }
   std::filesystem::remove(db);
 #endif
 
