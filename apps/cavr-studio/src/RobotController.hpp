@@ -95,8 +95,12 @@ class RobotController final : public QObject {
   Q_INVOKABLE void moveStep(int index, int delta);  // reorder: -1 up, +1 down
   Q_INVOKABLE void clearProgram();
   Q_INVOKABLE void runProgram();
-  Q_INVOKABLE QVariantList programSteps() const;    // [{index, kind, detail}]
+  Q_INVOKABLE QVariantList programSteps() const;    // [{index, kind, detail, status, ...}]
   Q_INVOKABLE void selectProgramStep(int index);
+  // Pre-flight validation of the current program against the active robot: axis
+  // limits, reachability (IK), frames. Summary string + overall ok flag.
+  Q_INVOKABLE QString validationSummary() const;
+  Q_INVOKABLE bool programValid() const;
 
   // Saved jobs in the DB.
   Q_INVOKABLE QVariantList savedPrograms() const;   // [{id, name, steps}]
@@ -116,6 +120,9 @@ class RobotController final : public QObject {
   // — the profile's declared banks (Y/M/AIN/AOT/GIN/GOT for PNR) with their live
   // telemetry value, for display and to drive the write controls.
   Q_INVOKABLE QVariantList ioChannels() const;
+  // Per-axis joint state vs its configured limits (degrees): {name, value, lower,
+  // upper, over}. Drives the pendant's joint-limit table.
+  Q_INVOKABLE QVariantList jointStatus() const;
   // Write an IO channel (digital 0/1, analog scaled) through the adapter, so the
   // scene -> robot IO path stays in sync on a remote controller too.
   Q_INVOKABLE void writeIo(const QString& name, double value);

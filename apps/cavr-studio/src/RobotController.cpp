@@ -3,8 +3,10 @@
 #include "AdapterFactory.hpp"
 
 #include <cavr/machine/enums.hpp>
+#include <cavr/machine/ik.hpp>
 #include <cavr/runtime/demo_plan.hpp>
 #include <cavr/runtime/session_io.hpp>
+#include <cavr/validation/trajectory_validator.hpp>
 
 #include <QDir>
 #include <QStandardPaths>
@@ -217,11 +219,24 @@ void RobotController::jogHome() {
 
 void RobotController::jogJoint(int axis, double delta_deg) {
   const auto& latest = manager_.latest();
+  const auto& axes = manager_.profile().axes;
   std::vector<double> target = latest.joint_positions;
-  const std::size_t dof = manager_.profile().axes.size();
+  const std::size_t dof = axes.size();
   target.resize(dof > 0 ? dof : 6, 0.0);
   if (axis < 0 || axis >= static_cast<int>(target.size())) return;
-  target[static_cast<std::size_t>(axis)] += delta_deg * 3.14159265358979323846 / 180.0;
+
+  double desired = target[static_cast<std::size_t>(axis)] + delta_deg * 3.14159265358979323846 / 180.0;
+  // Enforce the axis's configured joint limits: clamp and report rather than driving
+  // the robot past its mechanical range.
+  if (axis < static_cast<int>(axes.size())) {
+    const auto& a = axes[static_cast<std::size_t>(axis)];
+    if (desired < a.lower_limit || desired > a.upper_limit) {
+      desired = std::clamp(desired, a.lower_limit, a.upper_limit);
+      emit eventLogged(QString("jog | axis %1 at joint limit — move clamped")
+                           .arg(QString::fromStdString(a.name)));
+    }
+  }
+  target[static_cast<std::size_t>(axis)] = desired;
 
   cavr::machine::MotionCommand cmd;
   cmd.kind = cavr::machine::MotionKind::MoveJ;
@@ -371,6 +386,46 @@ QString step_detail(const cavr::machine::MotionCommand& c) {
   }
   return {};
 }
+
+// Pre-flight report: the library checks (limits/frames/target) plus a reachability
+// pass that IK-solves each Cartesian target along the chain (mirroring how the
+// controller executes it), so unreachable MoveL/MoveC poses are caught before Run.
+cavr::validation::ValidationReport full_report(const cavr::machine::MachineProfile& profile,
+                                               const cavr::machine::MotionTask& task,
+                                               const cavr::core::Pose3D& tool) {
+  using namespace cavr::machine;
+  cavr::validation::ValidationReport report = cavr::validation::validate_task(profile, task);
+
+  std::vector<double> seed(profile.dof(), 0.0);
+  for (std::size_t s = 0; s < task.size(); ++s) {
+    const auto& c = task[s];
+    if (c.kind == MotionKind::MoveJ && c.target.joints) {
+      seed = *c.target.joints;
+      seed.resize(profile.dof(), 0.0);
+    } else if ((c.kind == MotionKind::MoveL || c.kind == MotionKind::MoveC) && c.target.pose) {
+      const IkResult ik = inverse_kinematics(profile.axes, *c.target.pose, seed, tool);
+      if (!ik.converged) {
+        report.issues.push_back({Severity::Error, "Target pose unreachable (IK did not converge)",
+                                 static_cast<int>(s)});
+      } else {
+        seed = ik.joints;
+      }
+    }
+  }
+  return report;
+}
+
+// Worst severity among issues for one step: 2=error, 1=warning, 0=ok.
+int step_status(const cavr::validation::ValidationReport& report, int step) {
+  int worst = 0;
+  for (const auto& i : report.issues) {
+    if (i.step_index != step) continue;
+    if (i.severity == cavr::machine::Severity::Error || i.severity == cavr::machine::Severity::Critical)
+      return 2;
+    worst = std::max(worst, 1);
+  }
+  return worst;
+}
 }  // namespace
 
 void RobotController::addMoveL() {
@@ -498,6 +553,13 @@ void RobotController::runProgram() {
     emit eventLogged("program | empty, nothing to run");
     return;
   }
+  // Pre-flight: refuse to run a program with validation errors (unreachable poses,
+  // limit violations). Warnings are allowed through.
+  if (!programValid()) {
+    emit eventLogged("program | BLOCKED — fix validation errors before running (" +
+                     validationSummary() + ")");
+    return;
+  }
 
   manual_ = false;
   running_current_program_ = true;
@@ -512,6 +574,9 @@ QVariantList RobotController::programSteps() const {
   QVariantList out;
   const int active = running_current_program_ ? manager_.latest().current_step : -1;
   const cavr::machine::MotionTask& task = program_.task();
+  const cavr::core::Pose3D tool =
+      controller_ && controller_->tools() ? controller_->tools()->current_offset() : cavr::core::Pose3D{};
+  const auto report = full_report(manager_.profile(), task, tool);
   for (std::size_t i = 0; i < task.size(); ++i) {
     const auto& c = task[i];
     QVariantMap m;
@@ -523,6 +588,7 @@ QVariantList RobotController::programSteps() const {
     m["speed"] = c.speed;
     m["blend"] = c.blend_radius_m;
     m["wait"] = c.wait_s;
+    m["status"] = step_status(report, static_cast<int>(i));  // 0 ok, 1 warn, 2 error
     m["selected"] = program_.selected_step() == static_cast<int>(i);
     m["active"] = active == static_cast<int>(i);
     m["duration"] = c.kind == cavr::machine::MotionKind::Wait
@@ -542,6 +608,53 @@ void RobotController::selectProgramStep(int index) {
   if (program_.selected_step() == before) return;
   emit programSelectionChanged();
   emit programChanged();
+}
+
+QString RobotController::validationSummary() const {
+  const cavr::machine::MotionTask& task = program_.task();
+  if (task.empty()) return "no steps";
+  const cavr::core::Pose3D tool =
+      controller_ && controller_->tools() ? controller_->tools()->current_offset() : cavr::core::Pose3D{};
+  const auto report = full_report(manager_.profile(), task, tool);
+  const int errors = static_cast<int>(report.error_count());
+  int warnings = 0;
+  for (const auto& i : report.issues)
+    if (i.severity == cavr::machine::Severity::Warning) ++warnings;
+
+  if (errors == 0 && warnings == 0)
+    return QString("✓ %1 steps valid").arg(task.size());
+  QString s;
+  if (errors > 0) s += QString("✗ %1 error%2").arg(errors).arg(errors == 1 ? "" : "s");
+  if (warnings > 0) {
+    if (!s.isEmpty()) s += ", ";
+    s += QString("⚠ %1 warning%2").arg(warnings).arg(warnings == 1 ? "" : "s");
+  }
+  return s;
+}
+
+bool RobotController::programValid() const {
+  const cavr::core::Pose3D tool =
+      controller_ && controller_->tools() ? controller_->tools()->current_offset() : cavr::core::Pose3D{};
+  return full_report(manager_.profile(), program_.task(), tool).ok();
+}
+
+QVariantList RobotController::jointStatus() const {
+  QVariantList out;
+  const auto& axes = manager_.profile().axes;
+  const auto& q = manager_.latest().joint_positions;
+  for (std::size_t i = 0; i < axes.size(); ++i) {
+    const double value = (i < q.size() ? q[i] : 0.0) * kRadToDeg;
+    const double lower = axes[i].lower_limit * kRadToDeg;
+    const double upper = axes[i].upper_limit * kRadToDeg;
+    QVariantMap m;
+    m["name"] = QString::fromStdString(axes[i].name);
+    m["value"] = value;
+    m["lower"] = lower;
+    m["upper"] = upper;
+    m["over"] = value < lower - 1e-3 || value > upper + 1e-3;
+    out.push_back(m);
+  }
+  return out;
 }
 
 QVariantList RobotController::savedPrograms() const {

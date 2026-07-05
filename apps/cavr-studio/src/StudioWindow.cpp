@@ -75,21 +75,27 @@ StudioWindow::StudioWindow(QWidget* parent) : QMainWindow(parent) {
   connect(controller_, &RobotController::phaseChanged, this, [this](const QString& phase) {
     if (status_phase_) status_phase_->setText("Phase: " + phase);
   });
-  // Registry changes (save/load/delete) repopulate the robot list + IO table.
-  connect(controller_, &RobotController::robotsChanged, this, [this] { refresh_robots(); });
+  // Registry changes (save/load/delete) repopulate the robot list + IO table, and
+  // re-validate the program against the (possibly new) robot profile.
+  connect(controller_, &RobotController::robotsChanged, this, [this] {
+    refresh_robots();
+    refresh_program();
+  });
   // Editing the program repopulates the step list; DB changes the saved-jobs list.
   connect(controller_, &RobotController::programChanged, this, [this] { refresh_program(); });
   connect(controller_, &RobotController::programSelectionChanged, this, [this] { refresh_program(); });
   connect(controller_, &RobotController::savedProgramsChanged, this,
           [this] { refresh_saved_programs(); });
-  // Each telemetry tick refreshes the live IO values and the pendant read-out.
+  // Each telemetry tick refreshes the live IO values, joint limits and pendant.
   connect(controller_, &RobotController::telemetryChanged, this, [this] {
     refresh_io();
+    refresh_joints();
     update_pendant();
   });
   refresh_robots();
   refresh_program();
   refresh_saved_programs();
+  refresh_joints();
   update_pendant();
 }
 
@@ -360,6 +366,11 @@ QWidget* StudioWindow::make_program_panel() {
   connect(program_list_, &QListWidget::currentRowChanged, this,
           [this](int row) { controller_->selectProgramStep(row); });
 
+  // Pre-flight validation summary (green when valid, red on errors).
+  validation_label_ = new QLabel;
+  validation_label_->setObjectName("validationSummary");
+  layout->addWidget(validation_label_);
+
   // Add-step buttons: teach motion from the current pose/joints, or insert
   // Wait/Tool steps. MoveC needs a via first (Set via), then Add MoveC.
   auto* add_grid = new QGridLayout;
@@ -469,6 +480,7 @@ void StudioWindow::refresh_program() {
   program_list_->clear();
   for (const QVariant& entry : controller_->programSteps()) {
     const QVariantMap m = entry.toMap();
+    const int status = m.value("status").toInt();  // 0 ok, 1 warn, 2 error (validation)
     QString prefix = m.value("active").toBool() ? "в–¶ " : "  ";
     if (m.value("selected").toBool()) prefix = "в—Џ ";
     auto* item = new QListWidgetItem(
@@ -477,7 +489,16 @@ void StudioWindow::refresh_program() {
                      .arg(m.value("kind").toString().toUpper(), -8)
                      .arg(m.value("detail").toString()),
         program_list_);
+    // Validation status colouring: red = error, amber = warning, green = ok.
+    if (status == 2) item->setForeground(QColor("#ff6b6b"));
+    else if (status == 1) item->setForeground(QColor("#f0b866"));
+    else item->setForeground(QColor("#46f0a0"));
     if (m.value("selected").toBool()) program_list_->setCurrentItem(item);
+  }
+  if (validation_label_) {
+    validation_label_->setText(controller_->validationSummary());
+    const bool ok = controller_->programValid();
+    validation_label_->setStyleSheet(ok ? "color:#46f0a0;" : "color:#ff6b6b; font-weight:bold;");
   }
 }
 
@@ -490,6 +511,25 @@ void StudioWindow::refresh_saved_programs() {
         QString("%1  (%2 steps)").arg(m.value("name").toString()).arg(m.value("steps").toInt()),
         saved_programs_list_);
     item->setData(Qt::UserRole, m.value("id"));
+  }
+}
+
+void StudioWindow::refresh_joints() {
+  if (!joint_table_ || !controller_) return;
+  const QVariantList joints = controller_->jointStatus();
+  joint_table_->setRowCount(static_cast<int>(joints.size()));
+  for (int r = 0; r < joints.size(); ++r) {
+    const QVariantMap j = joints[r].toMap();
+    const bool over = j.value("over").toBool();
+    const auto cell = [&](const QString& text, bool highlight) {
+      auto* it = new QTableWidgetItem(text);
+      if (highlight) it->setForeground(QColor("#ff6b6b"));
+      return it;
+    };
+    joint_table_->setItem(r, 0, cell(j.value("name").toString(), over));
+    joint_table_->setItem(r, 1, cell(QString::number(j.value("value").toDouble(), 'f', 1), over));
+    joint_table_->setItem(r, 2, cell(QString::number(j.value("lower").toDouble(), 'f', 0), false));
+    joint_table_->setItem(r, 3, cell(QString::number(j.value("upper").toDouble(), 'f', 0), false));
   }
 }
 
@@ -602,6 +642,20 @@ QWidget* StudioWindow::make_jog_panel() {
     pendant_lcd_->setTextFormat(Qt::PlainText);
     pendant_lcd_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     layout->addWidget(pendant_lcd_);
+
+    layout->addWidget(horizontal_rule());
+
+    // Joint limits: each axis's live position against its configured range. A joint
+    // at or past its limit turns red — a limit-error surfaced right in the panel.
+    layout->addWidget(new QLabel("Joints (position / limits, °)"));
+    joint_table_ = new QTableWidget(0, 4);
+    joint_table_->setHorizontalHeaderLabels({"Axis", "Pos", "Min", "Max"});
+    joint_table_->verticalHeader()->hide();
+    joint_table_->horizontalHeader()->setStretchLastSection(true);
+    joint_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    joint_table_->setSelectionMode(QAbstractItemView::NoSelection);
+    joint_table_->setMaximumHeight(190);
+    layout->addWidget(joint_table_);
 
     layout->addWidget(horizontal_rule());
     add_section("1. LIVE MANUAL JOG");

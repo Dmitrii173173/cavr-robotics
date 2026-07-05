@@ -190,17 +190,17 @@ Item {
                       + " frame  ·  mm / deg"
                 color: "#7fa9d8"
                 font.pixelSize: 11
-                font.family: "Menlo, monospace"
+                font.family: "Menlo"
             }
             Row {
                 anchors.horizontalCenter: parent.horizontalCenter
                 spacing: 16
-                Text { text: "X" + tcpOverlay.fmt(tcpOverlay.val(0)); color: "#e6ecf2"; font.pixelSize: 14; font.family: "Menlo, monospace" }
-                Text { text: "Y" + tcpOverlay.fmt(tcpOverlay.val(1)); color: "#e6ecf2"; font.pixelSize: 14; font.family: "Menlo, monospace" }
-                Text { text: "Z" + tcpOverlay.fmt(tcpOverlay.val(2)); color: "#e6ecf2"; font.pixelSize: 14; font.family: "Menlo, monospace" }
-                Text { text: "Rx" + tcpOverlay.fmt(tcpOverlay.val(3)); color: "#f0b866"; font.pixelSize: 14; font.family: "Menlo, monospace" }
-                Text { text: "Ry" + tcpOverlay.fmt(tcpOverlay.val(4)); color: "#f0b866"; font.pixelSize: 14; font.family: "Menlo, monospace" }
-                Text { text: "Rz" + tcpOverlay.fmt(tcpOverlay.val(5)); color: "#f0b866"; font.pixelSize: 14; font.family: "Menlo, monospace" }
+                Text { text: "X" + tcpOverlay.fmt(tcpOverlay.val(0)); color: "#e6ecf2"; font.pixelSize: 14; font.family: "Menlo" }
+                Text { text: "Y" + tcpOverlay.fmt(tcpOverlay.val(1)); color: "#e6ecf2"; font.pixelSize: 14; font.family: "Menlo" }
+                Text { text: "Z" + tcpOverlay.fmt(tcpOverlay.val(2)); color: "#e6ecf2"; font.pixelSize: 14; font.family: "Menlo" }
+                Text { text: "Rx" + tcpOverlay.fmt(tcpOverlay.val(3)); color: "#f0b866"; font.pixelSize: 14; font.family: "Menlo" }
+                Text { text: "Ry" + tcpOverlay.fmt(tcpOverlay.val(4)); color: "#f0b866"; font.pixelSize: 14; font.family: "Menlo" }
+                Text { text: "Rz" + tcpOverlay.fmt(tcpOverlay.val(5)); color: "#f0b866"; font.pixelSize: 14; font.family: "Menlo" }
             }
         }
     }

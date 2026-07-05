@@ -34,13 +34,16 @@ class StudioWindow final : public QMainWindow {
   QTableWidget* io_table_{nullptr};
   QComboBox* io_write_channel_{nullptr};  // writable channels for the write controls
   QLabel* pendant_lcd_{nullptr};          // teach-pendant LCD read-out
+  QTableWidget* joint_table_{nullptr};    // per-axis position vs joint limits
   QListWidget* program_list_{nullptr};    // editable program steps
   QListWidget* saved_programs_list_{nullptr};  // saved jobs in the DB
   QLineEdit* program_name_{nullptr};      // name field for saving a job
+  QLabel* validation_label_{nullptr};     // pre-flight validation summary
   void refresh_robots();
   void refresh_io();       // live IO values + writable-channel list, on each telemetry tick
   void refresh_program();  // editable step list
   void refresh_saved_programs();  // saved-jobs list from the DB
+  void refresh_joints();   // per-axis position vs joint limits, on each telemetry tick
   void update_pendant();   // refresh the pendant LCD read-out on each telemetry tick
 
   [[nodiscard]] QDockWidget* make_dock(const QString& title, QWidget* widget);

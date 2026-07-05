@@ -89,20 +89,17 @@ bool handle_tool_command(tcp::TcpConnection& conn, mock::MockController& control
   return false;
 }
 
-// Streams the mock's trajectory to the client until it disconnects or sends stop,
-// looping the demo so the robot keeps moving. Completed frames are folded back
-// into a restart, so the client sees an uninterrupted Running stream.
+// Streams the mock's telemetry to the client until it disconnects or sends stop.
+// When the running task completes the robot holds its final pose (a completed
+// program does not auto-loop), and the client can issue the next command — a jog
+// (move_to), a new program (load_task + start) or a re-start — which takes over
+// the stream. This mirrors a real controller: one motion runs, then it waits.
 void stream_until_stopped(tcp::TcpConnection& conn, mock::MockController& controller, int rate_hz) {
   const auto frame_period = std::chrono::milliseconds(1000 / (rate_hz > 0 ? rate_hz : 50));
   std::int64_t now_ns = 0;
   bool running = true;
   while (running && conn.is_open()) {
     cavr::adapter_sdk::RobotState s = controller.poll(cavr::core::Timestamp::from_nanoseconds(now_ns));
-    if (s.program_state == machine::ProgramState::Completed) {
-      (void)controller.start();  // loop the trajectory; client keeps seeing Running
-      now_ns += kTickNs;
-      continue;
-    }
     send_state(conn, s);
 
     // Drain any client commands that arrived (stop/pause/move_to) without blocking.
@@ -125,6 +122,15 @@ void stream_until_stopped(tcp::TcpConnection& conn, mock::MockController& contro
         // Write an IO channel mid-stream; the value shows up in the next frame.
         (void)controller.write_io(value->at("name").as_string(), value->at("value").as_number());
         send_ack(conn, "io_write");
+      } else if (cmd == "load_task") {
+        // Load a new program mid-stream (a job authored in the client). It runs on
+        // the following start; the telemetry stream then reflects the new task.
+        (void)controller.load_task(proto::task_from_json(value->at("task")));
+        send_ack(conn, "load_task");
+      } else if (cmd == "start") {
+        // Run the most recently loaded task; the stream keeps flowing from it.
+        (void)controller.start();
+        send_ack(conn, "start");
       } else if (handle_tool_command(conn, controller, cmd, *value)) {
         // tool select/calibrate/clear applied mid-stream; TCP updates next frame
       } else if (cmd == "pause" || cmd == "resume") {
