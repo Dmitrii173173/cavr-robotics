@@ -77,6 +77,28 @@ target_link_libraries(cavr_machine_ik_test
 
 add_test(NAME cavr_machine_ik_test COMMAND cavr_machine_ik_test)
 
+add_executable(cavr_motion_profile_test
+  motion_profile_test.cpp
+)
+
+target_link_libraries(cavr_motion_profile_test
+  PRIVATE
+    CAVR::motion
+)
+
+add_test(NAME cavr_motion_profile_test COMMAND cavr_motion_profile_test)
+
+add_executable(cavr_motion_trajectory_test
+  motion_trajectory_test.cpp
+)
+
+target_link_libraries(cavr_motion_trajectory_test
+  PRIVATE
+    CAVR::motion
+)
+
+add_test(NAME cavr_motion_trajectory_test COMMAND cavr_motion_trajectory_test)
+
 add_executable(cavr_machine_frames_test
   machine_frames_test.cpp
 )

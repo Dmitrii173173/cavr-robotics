@@ -11,4 +11,5 @@ target_link_libraries(cavr_validation
     CAVR::core
     CAVR::time
     CAVR::machine
+    CAVR::motion
 )

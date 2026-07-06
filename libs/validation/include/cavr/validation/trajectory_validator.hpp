@@ -8,6 +8,8 @@
 #include <cavr/machine/kinematics.hpp>
 #include <cavr/machine/machine_profile.hpp>
 #include <cavr/machine/motion.hpp>
+#include <cavr/motion/limits.hpp>
+#include <cavr/motion/plan_task.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -27,6 +29,7 @@ struct Issue final {
 struct ValidationReport final {
   std::vector<Issue> issues;
   bool collisions_evaluated{false};   // honest: not implemented yet
+  double estimated_cycle_time_s{0.0}; // from the same planner the controller runs
 
   [[nodiscard]] bool ok() const noexcept {
     return std::none_of(issues.begin(), issues.end(), [](const Issue& i) {
@@ -89,6 +92,20 @@ struct ValidationReport final {
       report.issues.push_back({machine::Severity::Warning,
                                "Weld pass requested but profile has welding disabled", step});
     }
+  }
+
+  // Reachability + cycle time from the SAME planner the controller executes, so
+  // "what was validated" and "what will run" are one code path. Plan from home
+  // with the profile's tool frame; a Cartesian target whose IK leaves the
+  // workspace is a hard error (the controller could not run it either).
+  core::Pose3D tool{};
+  if (const machine::CoordinateFrame* tcp = profile.frame("tcp")) tool = tcp->transform;
+  const cavr::motion::TaskPlan plan = cavr::motion::plan_task(
+      profile.axes, tool, task, std::vector<double>(dof, 0.0), cavr::motion::MotionLimits::trapezoidal());
+  report.estimated_cycle_time_s = plan.cycle_time_s();
+  if (!plan.reachable) {
+    report.issues.push_back({machine::Severity::Error, "Cartesian target is unreachable (IK did not converge)",
+                             plan.unreachable_command});
   }
 
   return report;

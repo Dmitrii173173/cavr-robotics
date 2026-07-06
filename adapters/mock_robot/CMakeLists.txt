@@ -10,4 +10,6 @@ target_link_libraries(cavr_adapter_mock_robot
   INTERFACE
     CAVR::adapter_sdk
     CAVR::machine
+    CAVR::motion
+    CAVR::sim
 )
