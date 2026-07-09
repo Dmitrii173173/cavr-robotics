@@ -99,6 +99,18 @@ target_link_libraries(cavr_motion_trajectory_test
 
 add_test(NAME cavr_motion_trajectory_test COMMAND cavr_motion_trajectory_test)
 
+add_executable(cavr_sim_virtual_robot_test
+  sim_virtual_robot_test.cpp
+)
+
+target_link_libraries(cavr_sim_virtual_robot_test
+  PRIVATE
+    CAVR::sim
+    CAVR::adapter_mock_robot
+)
+
+add_test(NAME cavr_sim_virtual_robot_test COMMAND cavr_sim_virtual_robot_test)
+
 add_executable(cavr_machine_frames_test
   machine_frames_test.cpp
 )
