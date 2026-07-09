@@ -3,7 +3,7 @@
 A shared snapshot of where CAVR Studio is, so everyone has the same picture.
 Keep this updated as the architecture evolves.
 
-_Last updated: 2026-07-01._
+_Last updated: 2026-07-09._
 
 ## What CAVR is
 
@@ -40,9 +40,11 @@ hand-rolled). Dependency flow is a clean DAG.
 | Library | Role |
 |---------|------|
 | `libs/core` | `Vec3`, `Quaternion`, `Pose3D`, `Timestamp`/`Duration`. |
-| `libs/machine` | **MachineProfile** (axes, frames, tool/user frames, IO, telemetry channels, cameras, motion vocabulary, weld defaults), `kinematics.hpp` (FK), **`ik.hpp`** (numerical inverse kinematics — damped least-squares over the FK Jacobian, works for any serial chain, respects joint limits), `json.hpp` + `profile_io.hpp` (import/export). |
+| `libs/machine` | **MachineProfile** (axes, frames, tool/user frames, IO, telemetry channels, cameras, motion vocabulary, weld defaults), `kinematics.hpp` (FK), **`ik.hpp`** (numerical inverse kinematics — damped least-squares over the FK Jacobian, works for any serial chain, respects joint limits), `arc.hpp` (circular-arc interpolation for MoveC), `json.hpp` + `profile_io.hpp` (import/export). |
+| `libs/motion` | Time-parameterised motion planning, extracted so it can be tested in isolation and shared by execution **and** validation. `profile.hpp` (`VelocityProfile` — trapezoidal / bounded-jerk S-curve `sample(t)→{s,v,a}`), `trajectory.hpp` (joint-space `Trajectory` with **corner blending** — a segment with a `blend_radius` carries speed through the shared knot instead of stopping), `plan_task.hpp` (`plan_task` turns a `MotionTask` into a `Trajectory` via machine FK/IK/arc — the one planner both execution and validation call). No Qt / sockets / controller I/O. |
+| `libs/sim` | **`VirtualRobot`** — the stateful, adapter-free simulation of one robot: owns joint state, tool table and IO map, executes a `libs/motion` `Trajectory` against a supplied clock, drives the weld process signals and emits controller events, and reports everything as an `adapter_sdk::RobotState` exactly as a real controller's telemetry would. This is where robot behaviour lives (and where future realism — collisions, dynamics, faults — belongs), separate from "how the app talks to the controller". |
 | `libs/adapter_sdk` | **`RobotState`/TelemetryFrame** and the neutral **`ControllerAdapter`** interface (connect, discover_profile, load_task, start/pause/stop, `poll`, plus `move_to` for an immediate jog — the scene → robot direction). |
-| `adapters/mock_robot` | **`MockController`** — deterministic GP25 cell that executes a precomputed joint trajectory and reports real telemetry. The reference adapter implementation. |
+| `adapters/mock_robot` | **`MockController`** — a thin `ControllerAdapter` over a `cavr::sim::VirtualRobot`: the adapter owns only the connection concern and forwards behaviour to the `VirtualRobot`. The same backend runs inside `cavr-robotd`. The reference adapter implementation; ships several built-in profiles (GP25 welding cell, a vendor-neutral PNR robot). |
 | `adapters/generic_tcp_robot` | **`GenericTcpController`** — a real `ControllerAdapter` over TCP, drop-in for the mock (`connect` a `host:port` instead of `"mock"`). Speaks a newline-delimited JSON protocol (`protocol.hpp`) to a controller bridge/PLC; server-pushed telemetry is drained non-blocking each `poll()`. Program control, live `move_to` jog and the **tool table** (`get_tools`/`select_tool`/`calibrate_tool`/`clear_tool`, mirrored client-side) all travel over the protocol, so frames + tools + Cartesian motion work with a remote robot. All platform socket code (Winsock/BSD) is confined to one TU (`tcp_connection.cpp`), which also provides a `TcpListener` for reference servers/tests. |
 | `libs/validation` | **`trajectory_validator`** — joint-limit / speed / frame checks (collisions explicitly "not evaluated"). |
 | `libs/runtime` | **Timeline** (`OperationStep`/`TimelineEvent`), **`SessionManager`** (Scan→Plan→Validate→Execute→Monitor→Replay), `SessionLog` + `session_io` (save/replay), `demo_plan`. Also bridges sessions onto the recording layer: `record_session` (write/read a whole `SessionLog`), `session_recorder` (live, incremental Monitor-phase sink), `camera_recording` (synchronized camera stream), `catalog_index` (recording → catalog row). |
@@ -51,6 +53,13 @@ hand-rolled). Dependency flow is a clean DAG.
 | `libs/storage_mcap` | Authoritative **MCAP** backend (vendored foxglove/mcap, single TU, uncompressed) implementing the same interfaces, with a streaming (unchunked) mode for live recording. Gated by `CAVR_ENABLE_MCAP` (default `ON`); with it off the JSON backend is the only option and the tree stays dependency-free. |
 | `libs/catalog` | Local session catalog — reconstructible metadata only (id, path, span, robot/camera model, file size/hash, tags, annotations, bookmarks, validation summaries); heavy data stays in the recording. Engine-neutral `Catalog` interface, `InMemoryCatalog` reference impl, `SqliteCatalog` (vendored amalgamation, PIMPL) gated by `CAVR_ENABLE_SQLITE` (default `ON`). |
 | `libs/visualization` | `RobotModel` + FK + render-side scene data. |
+
+Reserved (README-only scaffolds, no code yet — not in the first MVP):
+`libs/calibration` (camera intrinsics, hand-eye, reprojection),
+`libs/fault_injection` (deterministic delay/drop/noise scenarios),
+`libs/frame_graph` (timestamped SE(3) transform tree), `libs/transport`
+(async TCP/UDP/serial, reconnect/heartbeat), `libs/time` (session clocks,
+source-clock mapping, deterministic scheduling).
 
 ## Backend CLIs
 
@@ -112,13 +121,19 @@ hand-rolled). Dependency flow is a clean DAG.
   plus a Qt Studio build on 3 OSes.
 - **Releases** ([`release.yml`](../.github/workflows/release.yml)): push a `v*`
   tag → per-OS bundled archives published to a GitHub Release.
-- Tests (18, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
+- Tests (24, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
   `cavr_visualization_robot_model_test`, `cavr_runtime_workflow_test`
   (profile round-trip, validation, full session, save/replay),
   `cavr_record_recording_test`, `cavr_record_copy_test`,
   `cavr_storage_mcap_recording_test`, `cavr_runtime_session_recording_test`,
   `cavr_runtime_session_recorder_test`, `cavr_runtime_camera_recording_test`,
-  `cavr_catalog_test`, `cavr_runtime_catalog_index_test`, `cavr_file_camera_test`, `cavr_machine_ik_test`, `cavr_machine_frames_test`,
+  `cavr_catalog_test`, `cavr_runtime_catalog_index_test`, `cavr_file_camera_test`,
+  `cavr_machine_ik_test`, `cavr_machine_frames_test`, `cavr_machine_arc_test`,
+  `cavr_profile_store_test`, `cavr_program_store_test`,
+  `cavr_motion_profile_test` (trapezoidal / S-curve velocity profiles),
+  `cavr_motion_trajectory_test` (corner blending vs. stop-at-knot),
+  `cavr_sim_virtual_robot_test` (VirtualRobot lifecycle: idle → run → complete,
+  pause/resume freeze, jog reachability, IO direction rules),
   `cavr_generic_tcp_robot_test` (a fake robot server over loopback TCP drives the
   adapter and a full `SessionManager` session, plus a scene → robot `move_to` jog
   end to end and the mock's own live jog).
