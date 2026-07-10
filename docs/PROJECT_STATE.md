@@ -47,7 +47,7 @@ hand-rolled). Dependency flow is a clean DAG.
 | `adapters/mock_robot` | **`MockController`** — a thin `ControllerAdapter` over a `cavr::sim::VirtualRobot`: the adapter owns only the connection concern and forwards behaviour to the `VirtualRobot`. The same backend runs inside `cavr-robotd`. The reference adapter implementation; ships several built-in profiles (GP25 welding cell, a vendor-neutral PNR robot). |
 | `adapters/generic_tcp_robot` | **`GenericTcpController`** — a real `ControllerAdapter` over TCP, drop-in for the mock (`connect` a `host:port` instead of `"mock"`). Speaks a newline-delimited JSON protocol (`protocol.hpp`) to a controller bridge/PLC; server-pushed telemetry is drained non-blocking each `poll()`. Program control, live `move_to` jog and the **tool table** (`get_tools`/`select_tool`/`calibrate_tool`/`clear_tool`, mirrored client-side) all travel over the protocol, so frames + tools + Cartesian motion work with a remote robot. All platform socket code (Winsock/BSD) is confined to one TU (`tcp_connection.cpp`), which also provides a `TcpListener` for reference servers/tests. |
 | `libs/validation` | **`trajectory_validator`** — joint-limit / speed / frame checks (collisions explicitly "not evaluated"). |
-| `libs/runtime` | **Timeline** (`OperationStep`/`TimelineEvent`), **`SessionManager`** (Scan→Plan→Validate→Execute→Monitor→Replay), `SessionLog` + `session_io` (save/replay), `demo_plan`. Also bridges sessions onto the recording layer: `record_session` (write/read a whole `SessionLog`), `session_recorder` (live, incremental Monitor-phase sink), `camera_recording` (synchronized camera stream), `catalog_index` (recording → catalog row). |
+| `libs/runtime` | **Timeline** (`OperationStep`/`TimelineEvent`), **`SessionManager`** (Scan→Plan→Validate→Execute→Monitor→Replay), `SessionLog` + `session_io` (save/replay), `demo_plan`. Bridges sessions onto the recording layer: `record_session` (write/read a whole `SessionLog`), `session_recorder` (live Monitor-phase sink), `camera_recording` + `point_cloud_recording` (synchronized image + 3D streams), `catalog_index` (recording → catalog row). **`vision_guidance`** closes the Vision-Guided loop: `cloud_in_base` places a scan `PointCloud` in the base frame via the hand-eye calibration + flange pose, `seam_offset` compares the observed seam to the planned one, and `apply_seam_offset` shifts the Cartesian targets of a `MotionTask` by that correction. |
 | `libs/adapter_sdk` (camera) | `CameraFrame`/`CameraAdapter` plus **`PointCloud`** (3D geometry: points + optional per-point colors/normals, time-stamped in a named sensor frame). `CameraAdapter::poll_point_cloud` is an optional depth/scan output (defaults to none, so 2D-only adapters are unaffected); `adapters/mock_camera`'s **`MockCamera`** is the synthetic reference and now emits both a frame and a synthetic scan cloud, and `adapters/file_camera`'s **`FileCameraAdapter`** replays a real `.pgm`/`.ppm`/`.png` image sequence from disk (dependency-free Netpbm reader/writer plus a **from-scratch PNG decoder** — a complete DEFLATE inflater and PNG unfilter, no libpng/zlib — decoding grayscale/truecolor/indexed/alpha 8-bit images). `SessionManager::attach_camera` polls whichever is attached on the same tick as the robot, streaming a synchronized robot + image + point-cloud session (`runtime::point_cloud_recording` serializes the cloud channel, mirroring `camera_recording`). |
 | `libs/record` | Storage-neutral recording model (`Channel`/`Message`, `RecordingWriter`/`RecordingReader`) plus the dependency-free JSON reference backend. `copy.hpp`'s `write_recording` replays a whole recording through any writer (remapping channel ids) — the backend-agnostic core of `cavr-convert`. |
 | `libs/storage_mcap` | Authoritative **MCAP** backend (vendored foxglove/mcap, single TU, uncompressed) implementing the same interfaces, with a streaming (unchunked) mode for live recording. Gated by `CAVR_ENABLE_MCAP` (default `ON`); with it off the JSON backend is the only option and the tree stays dependency-free. |
@@ -121,7 +121,7 @@ source-clock mapping, deterministic scheduling).
   plus a Qt Studio build on 3 OSes.
 - **Releases** ([`release.yml`](../.github/workflows/release.yml)): push a `v*`
   tag → per-OS bundled archives published to a GitHub Release.
-- Tests (28, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
+- Tests (29, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
   `cavr_visualization_robot_model_test`, `cavr_runtime_workflow_test`
   (profile round-trip, validation, full session, save/replay),
   `cavr_record_recording_test`, `cavr_record_copy_test`,
@@ -139,6 +139,8 @@ source-clock mapping, deterministic scheduling).
   round-trip),
   `cavr_hand_eye_solver_test` (Tsai-Lenz recovers a known transform from
   synthetic closed-loop samples, both mounting styles),
+  `cavr_runtime_vision_guidance_test` (scan cloud → base frame, seam offset, and
+  Cartesian plan correction, end to end),
   `cavr_runtime_point_cloud_recording_test` (synchronized robot + scan cloud
   streamed and read back verbatim, JSON and MCAP),
   `cavr_file_camera_png_test` (decodes a real dynamic-Huffman-compressed PNG,
@@ -147,17 +149,35 @@ source-clock mapping, deterministic scheduling).
   adapter and a full `SessionManager` session, plus a scene → robot `move_to` jog
   end to end and the mock's own live jog).
 
+## Vision-Guided pipeline (done)
+
+The calibration + vision workstream is complete and dependency-free, end to end:
+
+- **`PointCloud`** 3D data flows through the synchronized session and recording
+  (`adapter_sdk` + `runtime/point_cloud_recording`); `MockCamera` emits a scan
+  cloud each tick.
+- **From-scratch PNG decoder** (`adapters/file_camera/png.hpp`) replays real
+  `.png` frames — a full DEFLATE inflater + unfilter, no libpng/zlib.
+- **Calibration model** (`libs/calibration`): pinhole + Brown-Conrady intrinsics
+  (`project`/`unproject`/reprojection) and `HandEyeCalibration`, with a
+  **Tsai-Lenz** `solve_hand_eye` estimating the transform from captured samples.
+- **Vision guidance** (`runtime/vision_guidance`): scan cloud → base frame →
+  seam offset → Cartesian plan correction.
+
+What remains to make it production vision: a real image-decoding / live-capture
+`CameraAdapter` emitting true depth clouds (`adapters/opencv_camera` is still a
+placeholder), camera-intrinsics *fitting* (checkerboard), and a real feature
+detector behind `seam_offset` (today a centroid).
+
 ## What's next (natural extensions)
 
+- **Collision checking in `libs/validation`** — today collisions are explicitly
+  "not evaluated"; self/environment collision is the highest-value validation gap.
+  `libs/sim` is already earmarked as the home for it.
 - A concrete controller bridge speaking the `generic_tcp_robot` protocol (or a
   vendor-SDK `ControllerAdapter`, e.g. `adapters/robodk`, still an empty
   placeholder). `GenericTcpController` is done and validated against a fake
   server; what remains is a real robot/PLC on the other end.
-- A real image-decoding `CameraAdapter` (`adapters/opencv_camera` — currently
-  an empty placeholder) or a live capture device. `adapters/file_camera`'s
-  `FileCameraAdapter` already replays a real (Netpbm) image sequence from disk
-  and is wired into `cavr-record --frames-dir`, but that is dependency-free
-  disk replay, not decoding PNG/JPEG or a live camera.
-- Camera/point-cloud ingestion + hand-eye into the scan step.
-- Bind the remaining Studio panels (Telemetry, Calibration) to the data model.
+- Bind the remaining Studio panels (Telemetry, Calibration) to the data model,
+  and surface the vision-guided seam correction in the Scan/Plan UI.
 - Interactive timeline editing + replay scrubbing from a saved `SessionLog`.

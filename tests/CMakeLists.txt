@@ -134,6 +134,20 @@ target_link_libraries(cavr_hand_eye_solver_test
 
 add_test(NAME cavr_hand_eye_solver_test COMMAND cavr_hand_eye_solver_test)
 
+add_executable(cavr_runtime_vision_guidance_test
+  runtime_vision_guidance_test.cpp
+)
+
+target_link_libraries(cavr_runtime_vision_guidance_test
+  PRIVATE
+    CAVR::runtime
+    CAVR::calibration
+    CAVR::machine
+    CAVR::core
+)
+
+add_test(NAME cavr_runtime_vision_guidance_test COMMAND cavr_runtime_vision_guidance_test)
+
 add_executable(cavr_machine_frames_test
   machine_frames_test.cpp
 )

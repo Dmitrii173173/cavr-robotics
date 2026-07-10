@@ -11,6 +11,7 @@ target_link_libraries(cavr_runtime
     CAVR::core
     CAVR::machine
     CAVR::adapter_sdk
+    CAVR::calibration  # scan cloud -> base frame + seam correction (vision_guidance.hpp)
     CAVR::validation
     CAVR::record   # SessionLog <-> recording bridge (record_session.hpp)
     CAVR::catalog  # recording -> CatalogSession indexer (catalog_index.hpp)
