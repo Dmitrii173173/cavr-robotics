@@ -380,6 +380,18 @@ target_link_libraries(cavr_file_camera_test
 
 add_test(NAME cavr_file_camera_test COMMAND cavr_file_camera_test)
 
+add_executable(cavr_file_camera_png_test
+  file_camera_png_test.cpp
+)
+
+target_link_libraries(cavr_file_camera_png_test
+  PRIVATE
+    CAVR::adapter_file_camera
+    CAVR::core
+)
+
+add_test(NAME cavr_file_camera_png_test COMMAND cavr_file_camera_png_test)
+
 add_executable(cavr_generic_tcp_robot_test
   generic_tcp_robot_test.cpp
 )

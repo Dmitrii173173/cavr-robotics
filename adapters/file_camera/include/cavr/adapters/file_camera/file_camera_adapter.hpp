@@ -9,8 +9,10 @@
 
 #include <cavr/adapter_sdk/camera_adapter.hpp>
 #include <cavr/adapters/file_camera/netpbm.hpp>
+#include <cavr/adapters/file_camera/png.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -24,14 +26,15 @@ namespace sdk = cavr::adapter_sdk;
 
 class FileCameraAdapter final : public sdk::CameraAdapter {
  public:
-  // frame_paths: image files (.pgm/.ppm) in playback order. frame_id: the logical
-  // camera name stamped on each frame. fps: how often a new frame becomes due,
-  // measured against the timestamps passed to poll() (not wall-clock time).
+  // frame_paths: image files (.pgm/.ppm/.png) in playback order. frame_id: the
+  // logical camera name stamped on each frame. fps: how often a new frame becomes
+  // due, measured against the timestamps passed to poll() (not wall-clock time).
   FileCameraAdapter(std::vector<std::filesystem::path> frame_paths, std::string frame_id, double fps = 30.0)
       : paths_(std::move(frame_paths)), frame_id_(std::move(frame_id)), fps_(fps > 0.0 ? fps : 30.0) {}
 
-  // Every .pgm/.ppm file directly under `dir`, sorted by filename — the natural
-  // way to point this adapter at a captured or hand-authored image sequence.
+  // Every .pgm/.ppm/.png file directly under `dir`, sorted by filename — the
+  // natural way to point this adapter at a captured or hand-authored image
+  // sequence.
   [[nodiscard]] static FileCameraAdapter from_directory(const std::filesystem::path& dir, std::string frame_id,
                                                         double fps = 30.0) {
     std::vector<std::filesystem::path> paths;
@@ -39,7 +42,7 @@ class FileCameraAdapter final : public sdk::CameraAdapter {
       for (const auto& entry : std::filesystem::directory_iterator(dir)) {
         if (!entry.is_regular_file()) continue;
         const auto ext = entry.path().extension().string();
-        if (ext == ".pgm" || ext == ".ppm") paths.push_back(entry.path());
+        if (ext == ".pgm" || ext == ".ppm" || ext == ".png") paths.push_back(entry.path());
       }
     }
     std::sort(paths.begin(), paths.end());
@@ -66,17 +69,33 @@ class FileCameraAdapter final : public sdk::CameraAdapter {
     const double elapsed_s = static_cast<double>(now_ns - start_ns_) * 1e-9;
     if (elapsed_s * fps_ < static_cast<double>(next_index_)) return std::nullopt;  // next frame not due yet
 
-    const NetpbmLoad loaded = read_netpbm(paths_[next_index_]);
+    const std::filesystem::path& path = paths_[next_index_];
     ++next_index_;
-    if (!loaded.ok) return std::nullopt;  // a malformed frame is skipped, not fatal to the sequence
 
     sdk::CameraFrame frame;
     frame.timestamp = now;
     frame.frame_id = frame_id_;
-    frame.width = loaded.image.width;
-    frame.height = loaded.image.height;
-    frame.encoding = loaded.image.encoding;
-    frame.pixels = std::move(loaded.image.pixels);
+
+    // Pick the decoder by extension. Both are dependency-free: Netpbm is raw bytes
+    // behind a text header; PNG is decoded from scratch (inflate + unfilter).
+    std::string ext = path.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (ext == ".png") {
+      PngLoad loaded = read_png(path);
+      if (!loaded.ok) return std::nullopt;  // a malformed frame is skipped, not fatal
+      frame.width = loaded.image.width;
+      frame.height = loaded.image.height;
+      frame.encoding = loaded.image.encoding;
+      frame.pixels = std::move(loaded.image.pixels);
+    } else {
+      NetpbmLoad loaded = read_netpbm(path);
+      if (!loaded.ok) return std::nullopt;
+      frame.width = loaded.image.width;
+      frame.height = loaded.image.height;
+      frame.encoding = loaded.image.encoding;
+      frame.pixels = std::move(loaded.image.pixels);
+    }
     return frame;
   }
 
