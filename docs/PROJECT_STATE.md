@@ -53,7 +53,7 @@ hand-rolled). Dependency flow is a clean DAG.
 | `libs/storage_mcap` | Authoritative **MCAP** backend (vendored foxglove/mcap, single TU, uncompressed) implementing the same interfaces, with a streaming (unchunked) mode for live recording. Gated by `CAVR_ENABLE_MCAP` (default `ON`); with it off the JSON backend is the only option and the tree stays dependency-free. |
 | `libs/catalog` | Local session catalog — reconstructible metadata only (id, path, span, robot/camera model, file size/hash, tags, annotations, bookmarks, validation summaries); heavy data stays in the recording. Engine-neutral `Catalog` interface, `InMemoryCatalog` reference impl, `SqliteCatalog` (vendored amalgamation, PIMPL) gated by `CAVR_ENABLE_SQLITE` (default `ON`). |
 | `libs/visualization` | `RobotModel` + FK + render-side scene data. |
-| `libs/calibration` | The **Calibration-Aware** data model: `CameraIntrinsics` (pinhole + Brown-Conrady distortion) with `project`/`unproject`/`reprojection_error`, and `HandEyeCalibration` (camera↔flange / camera↔base SE(3) with method / residual / uncertainty / version metadata) plus `camera_in_base` and `point_base_to_camera` frame algebra, and JSON import/export. Dependency-free; the *estimation* algorithms (hand-eye solve, intrinsics fit) and live camera input are still to come. |
+| `libs/calibration` | The **Calibration-Aware** data model + estimation: `CameraIntrinsics` (pinhole + Brown-Conrady distortion) with `project`/`unproject`/`reprojection_error`; `HandEyeCalibration` (camera↔flange / camera↔base SE(3) with method / residual / uncertainty / version metadata) plus `camera_in_base` and `point_base_to_camera` frame algebra; and `solve_hand_eye` — a dependency-free **Tsai-Lenz** estimator that recovers the hand-eye transform (eye-in-hand or eye-to-hand) from synchronized (robot pose, target-in-camera) samples via AX = XB, hand-rolled 3x3 linear algebra, reporting the RMS residual. JSON import/export throughout. Intrinsics *fitting* and wiring vision into the plan are the remaining pieces. |
 
 Reserved (README-only scaffolds, no code yet — not in the first MVP):
 `libs/fault_injection` (deterministic delay/drop/noise scenarios),
@@ -121,7 +121,7 @@ source-clock mapping, deterministic scheduling).
   plus a Qt Studio build on 3 OSes.
 - **Releases** ([`release.yml`](../.github/workflows/release.yml)): push a `v*`
   tag → per-OS bundled archives published to a GitHub Release.
-- Tests (27, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
+- Tests (28, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
   `cavr_visualization_robot_model_test`, `cavr_runtime_workflow_test`
   (profile round-trip, validation, full session, save/replay),
   `cavr_record_recording_test`, `cavr_record_copy_test`,
@@ -137,6 +137,8 @@ source-clock mapping, deterministic scheduling).
   `cavr_calibration_test` (pinhole+distortion project/unproject round-trip,
   reprojection error, hand-eye eye-in-hand / eye-to-hand frame algebra, JSON
   round-trip),
+  `cavr_hand_eye_solver_test` (Tsai-Lenz recovers a known transform from
+  synthetic closed-loop samples, both mounting styles),
   `cavr_runtime_point_cloud_recording_test` (synchronized robot + scan cloud
   streamed and read back verbatim, JSON and MCAP),
   `cavr_file_camera_png_test` (decodes a real dynamic-Huffman-compressed PNG,

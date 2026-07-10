@@ -122,6 +122,18 @@ target_link_libraries(cavr_calibration_test
 
 add_test(NAME cavr_calibration_test COMMAND cavr_calibration_test)
 
+add_executable(cavr_hand_eye_solver_test
+  hand_eye_solver_test.cpp
+)
+
+target_link_libraries(cavr_hand_eye_solver_test
+  PRIVATE
+    CAVR::calibration
+    CAVR::machine
+)
+
+add_test(NAME cavr_hand_eye_solver_test COMMAND cavr_hand_eye_solver_test)
+
 add_executable(cavr_machine_frames_test
   machine_frames_test.cpp
 )
