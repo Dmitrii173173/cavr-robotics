@@ -12,9 +12,11 @@
 // irreplaceable telemetry stream is written as it happens.
 
 #include <cavr/adapter_sdk/camera_frame.hpp>
+#include <cavr/adapter_sdk/point_cloud.hpp>
 #include <cavr/adapter_sdk/robot_state.hpp>
 #include <cavr/record/writer.hpp>
 #include <cavr/runtime/camera_recording.hpp>
+#include <cavr/runtime/point_cloud_recording.hpp>
 #include <cavr/runtime/record_session.hpp>
 #include <cavr/runtime/session.hpp>
 
@@ -43,6 +45,9 @@ class SessionRecorder final {
     camera_ = writer_->add_channel({0, std::string(record::topics::kCameraColor),
                                     std::string(record::content_type::kJson),
                                     std::string(detail::kCameraSchema)});
+    points_ = writer_->add_channel({0, std::string(record::topics::kCameraPoints),
+                                    std::string(record::content_type::kJson),
+                                    std::string(detail::kPointCloudSchema)});
     begun_ = true;
   }
 
@@ -86,6 +91,20 @@ class SessionRecorder final {
     return record::RecordStatus::success();
   }
 
+  // Streams one point cloud, time-aligned with the telemetry recorded on the same
+  // tick. The (potentially heavy) 3D payload lands in the authoritative store.
+  record::RecordStatus record_point_cloud(const sdk::PointCloud& cloud) {
+    if (!begun_) begin();
+    record::RecordStatus status =
+        writer_->write({points_, cloud.timestamp, detail::point_cloud_to_json(cloud).dump(0)});
+    if (!status) {
+      ++errors_;
+      return status;
+    }
+    ++point_clouds_written_;
+    return record::RecordStatus::success();
+  }
+
   // Writes the session header and finalizes the recording. Idempotent. The header
   // is stamped at the session end time so writes stay in non-decreasing log-time
   // order for chunked backends.
@@ -107,6 +126,7 @@ class SessionRecorder final {
   [[nodiscard]] std::size_t frames_written() const noexcept { return frames_written_; }
   [[nodiscard]] std::size_t events_written() const noexcept { return events_written_; }
   [[nodiscard]] std::size_t camera_frames_written() const noexcept { return camera_frames_written_; }
+  [[nodiscard]] std::size_t point_clouds_written() const noexcept { return point_clouds_written_; }
   [[nodiscard]] std::size_t errors() const noexcept { return errors_; }
 
  private:
@@ -115,9 +135,11 @@ class SessionRecorder final {
   record::ChannelId telemetry_{record::kInvalidChannel};
   record::ChannelId events_{record::kInvalidChannel};
   record::ChannelId camera_{record::kInvalidChannel};
+  record::ChannelId points_{record::kInvalidChannel};
   std::size_t frames_written_{0};
   std::size_t events_written_{0};
   std::size_t camera_frames_written_{0};
+  std::size_t point_clouds_written_{0};
   std::size_t errors_{0};
   bool begun_{false};
   bool finished_{false};

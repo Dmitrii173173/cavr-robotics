@@ -6,6 +6,7 @@
 // rest of CAVR Studio stays camera-agnostic.
 
 #include <cavr/adapter_sdk/camera_frame.hpp>
+#include <cavr/adapter_sdk/point_cloud.hpp>
 #include <cavr/core/time.hpp>
 
 #include <optional>
@@ -22,6 +23,13 @@ class CameraAdapter {
 
   // The frame available at this instant, or nullopt when no new frame is ready.
   [[nodiscard]] virtual std::optional<CameraFrame> poll(core::Timestamp now) = 0;
+
+  // The point cloud available at this instant, or nullopt when the adapter has no
+  // new 3D data (or produces none). Optional: a plain 2D camera leaves this at the
+  // default so existing adapters are unaffected; a depth/scan sensor overrides it.
+  [[nodiscard]] virtual std::optional<PointCloud> poll_point_cloud(core::Timestamp /*now*/) {
+    return std::nullopt;
+  }
 };
 
 }  // namespace cavr::adapter_sdk

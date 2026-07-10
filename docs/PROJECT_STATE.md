@@ -48,7 +48,7 @@ hand-rolled). Dependency flow is a clean DAG.
 | `adapters/generic_tcp_robot` | **`GenericTcpController`** — a real `ControllerAdapter` over TCP, drop-in for the mock (`connect` a `host:port` instead of `"mock"`). Speaks a newline-delimited JSON protocol (`protocol.hpp`) to a controller bridge/PLC; server-pushed telemetry is drained non-blocking each `poll()`. Program control, live `move_to` jog and the **tool table** (`get_tools`/`select_tool`/`calibrate_tool`/`clear_tool`, mirrored client-side) all travel over the protocol, so frames + tools + Cartesian motion work with a remote robot. All platform socket code (Winsock/BSD) is confined to one TU (`tcp_connection.cpp`), which also provides a `TcpListener` for reference servers/tests. |
 | `libs/validation` | **`trajectory_validator`** — joint-limit / speed / frame checks (collisions explicitly "not evaluated"). |
 | `libs/runtime` | **Timeline** (`OperationStep`/`TimelineEvent`), **`SessionManager`** (Scan→Plan→Validate→Execute→Monitor→Replay), `SessionLog` + `session_io` (save/replay), `demo_plan`. Also bridges sessions onto the recording layer: `record_session` (write/read a whole `SessionLog`), `session_recorder` (live, incremental Monitor-phase sink), `camera_recording` (synchronized camera stream), `catalog_index` (recording → catalog row). |
-| `libs/adapter_sdk` (camera) | `CameraFrame`/`CameraAdapter`; `adapters/mock_camera`'s **`MockCamera`** is the synthetic reference implementation, and `adapters/file_camera`'s **`FileCameraAdapter`** replays a real `.pgm`/`.ppm` image sequence from disk (dependency-free Netpbm reader/writer). `SessionManager::attach_camera` polls whichever is attached on the same tick as the robot, so recordings carry synchronized robot + vision. |
+| `libs/adapter_sdk` (camera) | `CameraFrame`/`CameraAdapter` plus **`PointCloud`** (3D geometry: points + optional per-point colors/normals, time-stamped in a named sensor frame). `CameraAdapter::poll_point_cloud` is an optional depth/scan output (defaults to none, so 2D-only adapters are unaffected); `adapters/mock_camera`'s **`MockCamera`** is the synthetic reference and now emits both a frame and a synthetic scan cloud, and `adapters/file_camera`'s **`FileCameraAdapter`** replays a real `.pgm`/`.ppm` image sequence from disk (dependency-free Netpbm reader/writer). `SessionManager::attach_camera` polls whichever is attached on the same tick as the robot, streaming a synchronized robot + image + point-cloud session (`runtime::point_cloud_recording` serializes the cloud channel, mirroring `camera_recording`). |
 | `libs/record` | Storage-neutral recording model (`Channel`/`Message`, `RecordingWriter`/`RecordingReader`) plus the dependency-free JSON reference backend. `copy.hpp`'s `write_recording` replays a whole recording through any writer (remapping channel ids) — the backend-agnostic core of `cavr-convert`. |
 | `libs/storage_mcap` | Authoritative **MCAP** backend (vendored foxglove/mcap, single TU, uncompressed) implementing the same interfaces, with a streaming (unchunked) mode for live recording. Gated by `CAVR_ENABLE_MCAP` (default `ON`); with it off the JSON backend is the only option and the tree stays dependency-free. |
 | `libs/catalog` | Local session catalog — reconstructible metadata only (id, path, span, robot/camera model, file size/hash, tags, annotations, bookmarks, validation summaries); heavy data stays in the recording. Engine-neutral `Catalog` interface, `InMemoryCatalog` reference impl, `SqliteCatalog` (vendored amalgamation, PIMPL) gated by `CAVR_ENABLE_SQLITE` (default `ON`). |
@@ -121,7 +121,7 @@ source-clock mapping, deterministic scheduling).
   plus a Qt Studio build on 3 OSes.
 - **Releases** ([`release.yml`](../.github/workflows/release.yml)): push a `v*`
   tag → per-OS bundled archives published to a GitHub Release.
-- Tests (25, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
+- Tests (26, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
   `cavr_visualization_robot_model_test`, `cavr_runtime_workflow_test`
   (profile round-trip, validation, full session, save/replay),
   `cavr_record_recording_test`, `cavr_record_copy_test`,
@@ -137,6 +137,8 @@ source-clock mapping, deterministic scheduling).
   `cavr_calibration_test` (pinhole+distortion project/unproject round-trip,
   reprojection error, hand-eye eye-in-hand / eye-to-hand frame algebra, JSON
   round-trip),
+  `cavr_runtime_point_cloud_recording_test` (synchronized robot + scan cloud
+  streamed and read back verbatim, JSON and MCAP),
   `cavr_generic_tcp_robot_test` (a fake robot server over loopback TCP drives the
   adapter and a full `SessionManager` session, plus a scene → robot `move_to` jog
   end to end and the mock's own live jog).

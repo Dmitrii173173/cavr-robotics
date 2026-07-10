@@ -268,6 +268,28 @@ endif()
 
 add_test(NAME cavr_runtime_camera_recording_test COMMAND cavr_runtime_camera_recording_test)
 
+add_executable(cavr_runtime_point_cloud_recording_test
+  runtime_point_cloud_recording_test.cpp
+)
+
+target_link_libraries(cavr_runtime_point_cloud_recording_test
+  PRIVATE
+    CAVR::runtime
+    CAVR::record
+    CAVR::adapter_mock_robot
+    CAVR::adapter_mock_camera
+    CAVR::machine
+    CAVR::validation
+    CAVR::core
+)
+
+if(CAVR_ENABLE_MCAP)
+  target_link_libraries(cavr_runtime_point_cloud_recording_test PRIVATE CAVR::storage_mcap)
+  target_compile_definitions(cavr_runtime_point_cloud_recording_test PRIVATE CAVR_WITH_MCAP)
+endif()
+
+add_test(NAME cavr_runtime_point_cloud_recording_test COMMAND cavr_runtime_point_cloud_recording_test)
+
 add_executable(cavr_catalog_test
   catalog_test.cpp
 )

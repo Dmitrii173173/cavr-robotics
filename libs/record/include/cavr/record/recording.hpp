@@ -54,6 +54,7 @@ namespace topics {
 inline constexpr std::string_view kRobotTelemetry = "robot/telemetry";
 inline constexpr std::string_view kControllerEvents = "controller/events";
 inline constexpr std::string_view kCameraColor = "camera/color";
+inline constexpr std::string_view kCameraPoints = "camera/points";
 }  // namespace topics
 
 namespace content_type {

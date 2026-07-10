@@ -45,6 +45,8 @@ class SessionManager final {
   void attach_camera(sdk::CameraAdapter& camera) noexcept { camera_ = &camera; }
   [[nodiscard]] bool has_camera_frame() const noexcept { return has_camera_; }
   [[nodiscard]] const sdk::CameraFrame& latest_camera() const noexcept { return latest_camera_; }
+  [[nodiscard]] bool has_point_cloud() const noexcept { return has_point_cloud_; }
+  [[nodiscard]] const sdk::PointCloud& latest_point_cloud() const noexcept { return latest_point_cloud_; }
 
   [[nodiscard]] sdk::ConnectResult connect(sdk::ControllerAdapter& adapter,
                                            const sdk::ConnectionInfo& info) {
@@ -109,12 +111,18 @@ class SessionManager final {
     }
     if (recorder_) recorder_->record_frame(latest_);  // stream this frame to disk
 
-    // Capture a camera frame on the same tick so robot + vision stay synchronized.
+    // Capture a camera frame and any point cloud on the same tick so robot + vision
+    // + 3D geometry stay synchronized on one clock.
     if (camera_) {
       if (auto frame = camera_->poll(now)) {
         latest_camera_ = std::move(*frame);
         has_camera_ = true;
         if (recorder_) recorder_->record_camera_frame(latest_camera_);
+      }
+      if (auto cloud = camera_->poll_point_cloud(now)) {
+        latest_point_cloud_ = std::move(*cloud);
+        has_point_cloud_ = true;
+        if (recorder_) recorder_->record_point_cloud(latest_point_cloud_);
       }
     }
 
@@ -140,6 +148,8 @@ class SessionManager final {
   sdk::RobotState latest_;
   sdk::CameraFrame latest_camera_;
   bool has_camera_{false};
+  sdk::PointCloud latest_point_cloud_;
+  bool has_point_cloud_{false};
   bool started_clock_{false};
 };
 
