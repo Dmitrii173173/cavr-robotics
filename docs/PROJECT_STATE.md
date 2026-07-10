@@ -46,7 +46,7 @@ hand-rolled). Dependency flow is a clean DAG.
 | `libs/adapter_sdk` | **`RobotState`/TelemetryFrame** and the neutral **`ControllerAdapter`** interface (connect, discover_profile, load_task, start/pause/stop, `poll`, plus `move_to` for an immediate jog — the scene → robot direction). |
 | `adapters/mock_robot` | **`MockController`** — a thin `ControllerAdapter` over a `cavr::sim::VirtualRobot`: the adapter owns only the connection concern and forwards behaviour to the `VirtualRobot`. The same backend runs inside `cavr-robotd`. The reference adapter implementation; ships several built-in profiles (GP25 welding cell, a vendor-neutral PNR robot). |
 | `adapters/generic_tcp_robot` | **`GenericTcpController`** — a real `ControllerAdapter` over TCP, drop-in for the mock (`connect` a `host:port` instead of `"mock"`). Speaks a newline-delimited JSON protocol (`protocol.hpp`) to a controller bridge/PLC; server-pushed telemetry is drained non-blocking each `poll()`. Program control, live `move_to` jog and the **tool table** (`get_tools`/`select_tool`/`calibrate_tool`/`clear_tool`, mirrored client-side) all travel over the protocol, so frames + tools + Cartesian motion work with a remote robot. All platform socket code (Winsock/BSD) is confined to one TU (`tcp_connection.cpp`), which also provides a `TcpListener` for reference servers/tests. |
-| `libs/validation` | **`trajectory_validator`** — joint-limit / speed / frame checks (collisions explicitly "not evaluated"). |
+| `libs/validation` | **`trajectory_validator`** — joint-limit / speed / frame / reachability / cycle-time checks, plus **collision checking** (`collision.hpp`): the robot is approximated as link capsules and the planned trajectory is sampled and checked, at each configuration, for self-collision (non-adjacent links), floor penetration (a plane on a chosen up-axis), and sphere obstacles — all exact segment/segment and segment/sphere/plane distances. `validate_task(profile, task, CollisionModel)` sets `collisions_evaluated = true` and reports the worst penetration per pair; boxes/meshes are deliberately not modelled yet rather than approximated. |
 | `libs/runtime` | **Timeline** (`OperationStep`/`TimelineEvent`), **`SessionManager`** (Scan→Plan→Validate→Execute→Monitor→Replay), `SessionLog` + `session_io` (save/replay), `demo_plan`. Bridges sessions onto the recording layer: `record_session` (write/read a whole `SessionLog`), `session_recorder` (live Monitor-phase sink), `camera_recording` + `point_cloud_recording` (synchronized image + 3D streams), `catalog_index` (recording → catalog row). **`vision_guidance`** closes the Vision-Guided loop: `cloud_in_base` places a scan `PointCloud` in the base frame via the hand-eye calibration + flange pose, `seam_offset` compares the observed seam to the planned one, and `apply_seam_offset` shifts the Cartesian targets of a `MotionTask` by that correction. |
 | `libs/adapter_sdk` (camera) | `CameraFrame`/`CameraAdapter` plus **`PointCloud`** (3D geometry: points + optional per-point colors/normals, time-stamped in a named sensor frame). `CameraAdapter::poll_point_cloud` is an optional depth/scan output (defaults to none, so 2D-only adapters are unaffected); `adapters/mock_camera`'s **`MockCamera`** is the synthetic reference and now emits both a frame and a synthetic scan cloud, and `adapters/file_camera`'s **`FileCameraAdapter`** replays a real `.pgm`/`.ppm`/`.png` image sequence from disk (dependency-free Netpbm reader/writer plus a **from-scratch PNG decoder** — a complete DEFLATE inflater and PNG unfilter, no libpng/zlib — decoding grayscale/truecolor/indexed/alpha 8-bit images). `SessionManager::attach_camera` polls whichever is attached on the same tick as the robot, streaming a synchronized robot + image + point-cloud session (`runtime::point_cloud_recording` serializes the cloud channel, mirroring `camera_recording`). |
 | `libs/record` | Storage-neutral recording model (`Channel`/`Message`, `RecordingWriter`/`RecordingReader`) plus the dependency-free JSON reference backend. `copy.hpp`'s `write_recording` replays a whole recording through any writer (remapping channel ids) — the backend-agnostic core of `cavr-convert`. |
@@ -121,7 +121,7 @@ source-clock mapping, deterministic scheduling).
   plus a Qt Studio build on 3 OSes.
 - **Releases** ([`release.yml`](../.github/workflows/release.yml)): push a `v*`
   tag → per-OS bundled archives published to a GitHub Release.
-- Tests (29, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
+- Tests (30, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
   `cavr_visualization_robot_model_test`, `cavr_runtime_workflow_test`
   (profile round-trip, validation, full session, save/replay),
   `cavr_record_recording_test`, `cavr_record_copy_test`,
@@ -141,6 +141,8 @@ source-clock mapping, deterministic scheduling).
   synthetic closed-loop samples, both mounting styles),
   `cavr_runtime_vision_guidance_test` (scan cloud → base frame, seam offset, and
   Cartesian plan correction, end to end),
+  `cavr_validation_collision_test` (clean cell passes, floor / obstacle-sphere /
+  self-collision each detected over the sampled trajectory),
   `cavr_runtime_point_cloud_recording_test` (synchronized robot + scan cloud
   streamed and read back verbatim, JSON and MCAP),
   `cavr_file_camera_png_test` (decodes a real dynamic-Huffman-compressed PNG,
@@ -171,9 +173,9 @@ detector behind `seam_offset` (today a centroid).
 
 ## What's next (natural extensions)
 
-- **Collision checking in `libs/validation`** — today collisions are explicitly
-  "not evaluated"; self/environment collision is the highest-value validation gap.
-  `libs/sim` is already earmarked as the home for it.
+- Richer collision geometry: box/mesh obstacles and per-link radii (today the
+  model is link capsules vs self / floor / sphere obstacles), and surfacing the
+  `CollisionModel` in the Studio Validate phase.
 - A concrete controller bridge speaking the `generic_tcp_robot` protocol (or a
   vendor-SDK `ControllerAdapter`, e.g. `adapters/robodk`, still an empty
   placeholder). `GenericTcpController` is done and validated against a fake
