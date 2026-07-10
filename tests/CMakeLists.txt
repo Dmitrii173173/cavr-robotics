@@ -122,6 +122,32 @@ target_link_libraries(cavr_calibration_test
 
 add_test(NAME cavr_calibration_test COMMAND cavr_calibration_test)
 
+add_executable(cavr_hand_eye_solver_test
+  hand_eye_solver_test.cpp
+)
+
+target_link_libraries(cavr_hand_eye_solver_test
+  PRIVATE
+    CAVR::calibration
+    CAVR::machine
+)
+
+add_test(NAME cavr_hand_eye_solver_test COMMAND cavr_hand_eye_solver_test)
+
+add_executable(cavr_runtime_vision_guidance_test
+  runtime_vision_guidance_test.cpp
+)
+
+target_link_libraries(cavr_runtime_vision_guidance_test
+  PRIVATE
+    CAVR::runtime
+    CAVR::calibration
+    CAVR::machine
+    CAVR::core
+)
+
+add_test(NAME cavr_runtime_vision_guidance_test COMMAND cavr_runtime_vision_guidance_test)
+
 add_executable(cavr_machine_frames_test
   machine_frames_test.cpp
 )
@@ -268,6 +294,28 @@ endif()
 
 add_test(NAME cavr_runtime_camera_recording_test COMMAND cavr_runtime_camera_recording_test)
 
+add_executable(cavr_runtime_point_cloud_recording_test
+  runtime_point_cloud_recording_test.cpp
+)
+
+target_link_libraries(cavr_runtime_point_cloud_recording_test
+  PRIVATE
+    CAVR::runtime
+    CAVR::record
+    CAVR::adapter_mock_robot
+    CAVR::adapter_mock_camera
+    CAVR::machine
+    CAVR::validation
+    CAVR::core
+)
+
+if(CAVR_ENABLE_MCAP)
+  target_link_libraries(cavr_runtime_point_cloud_recording_test PRIVATE CAVR::storage_mcap)
+  target_compile_definitions(cavr_runtime_point_cloud_recording_test PRIVATE CAVR_WITH_MCAP)
+endif()
+
+add_test(NAME cavr_runtime_point_cloud_recording_test COMMAND cavr_runtime_point_cloud_recording_test)
+
 add_executable(cavr_catalog_test
   catalog_test.cpp
 )
@@ -357,6 +405,18 @@ target_link_libraries(cavr_file_camera_test
 )
 
 add_test(NAME cavr_file_camera_test COMMAND cavr_file_camera_test)
+
+add_executable(cavr_file_camera_png_test
+  file_camera_png_test.cpp
+)
+
+target_link_libraries(cavr_file_camera_png_test
+  PRIVATE
+    CAVR::adapter_file_camera
+    CAVR::core
+)
+
+add_test(NAME cavr_file_camera_png_test COMMAND cavr_file_camera_png_test)
 
 add_executable(cavr_generic_tcp_robot_test
   generic_tcp_robot_test.cpp

@@ -17,6 +17,14 @@ pose+image sequence (e.g. Tsai-Lenz hand-eye) are a later phase.
   algebra built on `libs/machine` SE(3) compose/invert.
 - **`calibration_io.hpp`** — JSON import/export for both, so a calibration is a
   portable, human-inspectable file that sits next to a machine profile.
+- **`hand_eye_solver.hpp`** — `solve_hand_eye`: a dependency-free **Tsai-Lenz**
+  estimator that recovers the hand-eye transform from a set of synchronized
+  `{flange_in_base, target_in_camera}` samples by solving AX = XB (rotation via
+  the modified-Rodrigues form of each motion pair, then translation by least
+  squares), for both `EyeInHand` and `EyeToHand`. Fills in a `HandEyeCalibration`
+  (method, RMS residual) from captured data instead of a hand-entered number. The
+  3x3 linear algebra (solve, skew, rotation↔quaternion) is hand-rolled, in the
+  spirit of `libs/machine`'s IK.
 
-Reserved for later phases: intrinsics/hand-eye *estimation* algorithms, live
-camera decoding, and wiring vision into the scan → plan step.
+Reserved for later phases: camera-intrinsics *fitting* (checkerboard), and wiring
+vision into the scan → plan step.
