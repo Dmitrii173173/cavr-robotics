@@ -53,9 +53,9 @@ hand-rolled). Dependency flow is a clean DAG.
 | `libs/storage_mcap` | Authoritative **MCAP** backend (vendored foxglove/mcap, single TU, uncompressed) implementing the same interfaces, with a streaming (unchunked) mode for live recording. Gated by `CAVR_ENABLE_MCAP` (default `ON`); with it off the JSON backend is the only option and the tree stays dependency-free. |
 | `libs/catalog` | Local session catalog — reconstructible metadata only (id, path, span, robot/camera model, file size/hash, tags, annotations, bookmarks, validation summaries); heavy data stays in the recording. Engine-neutral `Catalog` interface, `InMemoryCatalog` reference impl, `SqliteCatalog` (vendored amalgamation, PIMPL) gated by `CAVR_ENABLE_SQLITE` (default `ON`). |
 | `libs/visualization` | `RobotModel` + FK + render-side scene data. |
+| `libs/calibration` | The **Calibration-Aware** data model: `CameraIntrinsics` (pinhole + Brown-Conrady distortion) with `project`/`unproject`/`reprojection_error`, and `HandEyeCalibration` (camera↔flange / camera↔base SE(3) with method / residual / uncertainty / version metadata) plus `camera_in_base` and `point_base_to_camera` frame algebra, and JSON import/export. Dependency-free; the *estimation* algorithms (hand-eye solve, intrinsics fit) and live camera input are still to come. |
 
 Reserved (README-only scaffolds, no code yet — not in the first MVP):
-`libs/calibration` (camera intrinsics, hand-eye, reprojection),
 `libs/fault_injection` (deterministic delay/drop/noise scenarios),
 `libs/frame_graph` (timestamped SE(3) transform tree), `libs/transport`
 (async TCP/UDP/serial, reconnect/heartbeat), `libs/time` (session clocks,
@@ -121,7 +121,7 @@ source-clock mapping, deterministic scheduling).
   plus a Qt Studio build on 3 OSes.
 - **Releases** ([`release.yml`](../.github/workflows/release.yml)): push a `v*`
   tag → per-OS bundled archives published to a GitHub Release.
-- Tests (24, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
+- Tests (25, all green): `cavr_core_domain_types_test`, `cavr_replay_*`,
   `cavr_visualization_robot_model_test`, `cavr_runtime_workflow_test`
   (profile round-trip, validation, full session, save/replay),
   `cavr_record_recording_test`, `cavr_record_copy_test`,
@@ -134,6 +134,9 @@ source-clock mapping, deterministic scheduling).
   `cavr_motion_trajectory_test` (corner blending vs. stop-at-knot),
   `cavr_sim_virtual_robot_test` (VirtualRobot lifecycle: idle → run → complete,
   pause/resume freeze, jog reachability, IO direction rules),
+  `cavr_calibration_test` (pinhole+distortion project/unproject round-trip,
+  reprojection error, hand-eye eye-in-hand / eye-to-hand frame algebra, JSON
+  round-trip),
   `cavr_generic_tcp_robot_test` (a fake robot server over loopback TCP drives the
   adapter and a full `SessionManager` session, plus a scene → robot `move_to` jog
   end to end and the mock's own live jog).

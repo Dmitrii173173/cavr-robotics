@@ -9,5 +9,6 @@ target_include_directories(cavr_calibration
 target_link_libraries(cavr_calibration
   INTERFACE
     CAVR::core
+    CAVR::machine
     CAVR::frame_graph
 )
