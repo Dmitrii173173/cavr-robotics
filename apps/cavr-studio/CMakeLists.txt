@@ -34,8 +34,10 @@ target_link_libraries(cavr-studio
     CAVR::runtime
     CAVR::machine
     CAVR::validation
+    CAVR::calibration
     CAVR::catalog
     CAVR::adapter_mock_robot
+    CAVR::adapter_mock_camera
     CAVR::adapter_generic_tcp_robot
 )
 

@@ -67,6 +67,11 @@ RobotController::RobotController(QObject* parent) : QObject(parent) {
 
   connect(&timer_, &QTimer::timeout, this, &RobotController::tick);
 
+  // Attach a synchronized vision source: while a session runs, the manager polls a
+  // scan PointCloud on the same tick as the robot, so the vision-guided seam
+  // correction has live 3D data.
+  manager_.attach_camera(camera_);
+
   // Initial robot. CAVR_ROBOT_ENDPOINT=host:port still drives the scene from a
   // remote robot over TCP (back-compat); otherwise connect the first registered
   // robot, or a GP25 preset if the registry is unavailable.
@@ -390,11 +395,27 @@ QString step_detail(const cavr::machine::MotionCommand& c) {
 // Pre-flight report: the library checks (limits/frames/target) plus a reachability
 // pass that IK-solves each Cartesian target along the chain (mirroring how the
 // controller executes it), so unreachable MoveL/MoveC poses are caught before Run.
+// A conservative default collision model for a profile: link capsules against
+// themselves and the floor. The GP25 asset is Y-up, so the floor is the y-plane.
+// No obstacle spheres by default, so a valid demo program stays clean.
+cavr::validation::CollisionModel default_collision_model(const cavr::machine::MachineProfile&) {
+  cavr::validation::CollisionModel model;
+  model.link_radius_m = 0.05;
+  model.check_self = true;
+  model.check_floor = true;
+  model.floor_up_axis = 1;  // Y-up
+  model.floor_level_m = 0.0;
+  return model;
+}
+
 cavr::validation::ValidationReport full_report(const cavr::machine::MachineProfile& profile,
                                                const cavr::machine::MotionTask& task,
                                                const cavr::core::Pose3D& tool) {
   using namespace cavr::machine;
-  cavr::validation::ValidationReport report = cavr::validation::validate_task(profile, task);
+  // The collision overload runs the base checks (limits/frames/reachability/cycle
+  // time) and then samples the planned trajectory for self/floor collisions.
+  cavr::validation::ValidationReport report =
+      cavr::validation::validate_task(profile, task, default_collision_model(profile));
 
   std::vector<double> seed(profile.dof(), 0.0);
   for (std::size_t s = 0; s < task.size(); ++s) {
@@ -636,6 +657,93 @@ bool RobotController::programValid() const {
   const cavr::core::Pose3D tool =
       controller_ && controller_->tools() ? controller_->tools()->current_offset() : cavr::core::Pose3D{};
   return full_report(manager_.profile(), program_.task(), tool).ok();
+}
+
+QString RobotController::collisionSummary() const {
+  const cavr::machine::MotionTask& task = program_.task();
+  if (task.empty()) return "no steps";
+  const cavr::core::Pose3D tool =
+      controller_ && controller_->tools() ? controller_->tools()->current_offset() : cavr::core::Pose3D{};
+  const auto report = full_report(manager_.profile(), task, tool);
+  int collisions = 0;
+  for (const auto& i : report.issues)
+    if (i.message.rfind("Collision:", 0) == 0) ++collisions;
+  if (collisions == 0) return "✓ no collisions (self + floor checked)";
+  return QString("✗ %1 collision%2").arg(collisions).arg(collisions == 1 ? "" : "s");
+}
+
+bool RobotController::hasScan() const { return manager_.has_point_cloud(); }
+
+int RobotController::scanPointCount() const {
+  return static_cast<int>(manager_.latest_point_cloud().size());
+}
+
+// The seam correction (metres, base frame): place the live scan in the base frame
+// via the profile's hand-eye extrinsics and the current flange pose, then compare
+// its centroid to where the plan expects the seam (the program's first Cartesian
+// target, else the current TCP).
+cavr::core::Vec3 RobotController::seam_offset_m() const {
+  if (!manager_.has_point_cloud()) return {};
+  const auto& profile = manager_.profile();
+
+  cavr::calibration::HandEyeCalibration he;
+  he.type = cavr::calibration::HandEyeType::EyeInHand;
+  if (!profile.cameras.empty()) {
+    he.transform = profile.cameras.front().extrinsics;  // camera-in-flange
+    he.camera_frame = profile.cameras.front().name;
+  }
+
+  const auto fk = cavr::machine::forward_kinematics(profile.axes, manager_.latest().joint_positions,
+                                                    cavr::core::Pose3D{});
+  const cavr::core::Pose3D flange = fk.tcp;  // identity tool offset → the flange frame
+
+  const auto cloud_base = cavr::runtime::cloud_in_base(manager_.latest_point_cloud(), he, flange);
+
+  cavr::core::Vec3 expected = manager_.latest().tcp_pose.position_m;
+  for (const auto& c : program_.task()) {
+    if ((c.kind == cavr::machine::MotionKind::MoveL || c.kind == cavr::machine::MotionKind::MoveC) &&
+        c.target.pose) {
+      expected = c.target.pose->position_m;
+      break;
+    }
+  }
+  return cavr::runtime::seam_offset(cloud_base, expected);
+}
+
+QVariantList RobotController::seamOffsetMm() const {
+  if (!manager_.has_point_cloud()) return {};
+  const cavr::core::Vec3 o = seam_offset_m();
+  return QVariantList{o.x_m * 1000.0, o.y_m * 1000.0, o.z_m * 1000.0};
+}
+
+QString RobotController::visionSummary() const {
+  if (!manager_.has_point_cloud()) return "no live scan — press Run Demo";
+  const cavr::core::Vec3 o = seam_offset_m();
+  return QString("scan %1 pts  •  Δ (%2, %3, %4) mm")
+      .arg(scanPointCount())
+      .arg(o.x_m * 1000.0, 0, 'f', 1)
+      .arg(o.y_m * 1000.0, 0, 'f', 1)
+      .arg(o.z_m * 1000.0, 0, 'f', 1);
+}
+
+void RobotController::applySeamCorrection() {
+  if (!manager_.has_point_cloud()) {
+    emit eventLogged("vision | no live scan — press Run Demo first");
+    return;
+  }
+  if (program_.task().empty()) {
+    emit eventLogged("vision | program is empty — nothing to correct");
+    return;
+  }
+  const cavr::core::Vec3 o = seam_offset_m();
+  program_.set_task(cavr::runtime::apply_seam_offset(program_.task(), o));
+  running_current_program_ = false;
+  emit eventLogged(QString("vision | applied seam correction Δ (%1, %2, %3) mm")
+                       .arg(o.x_m * 1000.0, 0, 'f', 1)
+                       .arg(o.y_m * 1000.0, 0, 'f', 1)
+                       .arg(o.z_m * 1000.0, 0, 'f', 1));
+  emit programSelectionChanged();
+  emit programChanged();
 }
 
 QVariantList RobotController::jointStatus() const {
