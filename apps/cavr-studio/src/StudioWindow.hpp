@@ -39,12 +39,15 @@ class StudioWindow final : public QMainWindow {
   QListWidget* saved_programs_list_{nullptr};  // saved jobs in the DB
   QLineEdit* program_name_{nullptr};      // name field for saving a job
   QLabel* validation_label_{nullptr};     // pre-flight validation summary
+  QLabel* collision_label_{nullptr};      // collision status (self + floor)
+  QLabel* vision_label_{nullptr};         // live vision-guided seam correction read-out
   void refresh_robots();
   void refresh_io();       // live IO values + writable-channel list, on each telemetry tick
   void refresh_program();  // editable step list
   void refresh_saved_programs();  // saved-jobs list from the DB
   void refresh_joints();   // per-axis position vs joint limits, on each telemetry tick
   void update_pendant();   // refresh the pendant LCD read-out on each telemetry tick
+  void refresh_calibration();  // live vision-guidance read-out, on each telemetry tick
 
   [[nodiscard]] QDockWidget* make_dock(const QString& title, QWidget* widget);
   [[nodiscard]] QWidget* make_robots_panel();

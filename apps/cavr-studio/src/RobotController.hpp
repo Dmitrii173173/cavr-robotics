@@ -16,12 +16,15 @@
 
 #include <cavr/adapter_sdk/controller_adapter.hpp>
 #include <cavr/adapters/generic_tcp_robot/generic_tcp_controller.hpp>
+#include <cavr/adapters/mock_camera/mock_camera.hpp>
 #include <cavr/adapters/mock_robot/mock_controller.hpp>
 #include <cavr/catalog/sqlite_profile_store.hpp>
 #include <cavr/catalog/sqlite_program_store.hpp>
+#include <cavr/core/geometry.hpp>
 #include <cavr/machine/frames.hpp>
 #include <cavr/machine/motion.hpp>
 #include <cavr/runtime/session_manager.hpp>
+#include <cavr/runtime/vision_guidance.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -101,6 +104,19 @@ class RobotController final : public QObject {
   // limits, reachability (IK), frames. Summary string + overall ok flag.
   Q_INVOKABLE QString validationSummary() const;
   Q_INVOKABLE bool programValid() const;
+  // Collision status of the current program against the active robot: self-collision
+  // and floor penetration over the sampled trajectory (see libs/validation).
+  Q_INVOKABLE QString collisionSummary() const;
+
+  // Vision guidance: the live scan (a synchronized PointCloud from the camera) is
+  // placed in the base frame via the profile's hand-eye extrinsics and compared to
+  // the planned seam. seamOffsetMm is the [dx,dy,dz] correction in millimetres;
+  // applySeamCorrection shifts the program's Cartesian targets by it.
+  Q_INVOKABLE bool hasScan() const;
+  Q_INVOKABLE int scanPointCount() const;
+  Q_INVOKABLE QVariantList seamOffsetMm() const;
+  Q_INVOKABLE QString visionSummary() const;
+  Q_INVOKABLE void applySeamCorrection();
 
   // Saved jobs in the DB.
   Q_INVOKABLE QVariantList savedPrograms() const;   // [{id, name, steps}]
@@ -158,6 +174,11 @@ class RobotController final : public QObject {
   cavr::machine::CoordinateSystem coord_sys_{cavr::machine::CoordinateSystem::Base};
   double speed_mm_s_{50.0};  // Cartesian jog speed
   cavr::runtime::SessionManager manager_;
+  // Synchronized vision source: streams a scan PointCloud on the same tick as the
+  // robot during a running session, feeding the vision-guided seam correction.
+  cavr::adapters::mock_camera::MockCamera camera_{8, 8, "weld_cam"};
+  // Private helper: the seam correction in metres for the current scan + program.
+  [[nodiscard]] cavr::core::Vec3 seam_offset_m() const;
   ProgramDocument program_;
   bool running_current_program_{false};
   QTimer timer_;

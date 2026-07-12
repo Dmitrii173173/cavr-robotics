@@ -86,17 +86,20 @@ StudioWindow::StudioWindow(QWidget* parent) : QMainWindow(parent) {
   connect(controller_, &RobotController::programSelectionChanged, this, [this] { refresh_program(); });
   connect(controller_, &RobotController::savedProgramsChanged, this,
           [this] { refresh_saved_programs(); });
-  // Each telemetry tick refreshes the live IO values, joint limits and pendant.
+  // Each telemetry tick refreshes the live IO values, joint limits, pendant and the
+  // live vision-guidance read-out.
   connect(controller_, &RobotController::telemetryChanged, this, [this] {
     refresh_io();
     refresh_joints();
     update_pendant();
+    refresh_calibration();
   });
   refresh_robots();
   refresh_program();
   refresh_saved_programs();
   refresh_joints();
   update_pendant();
+  refresh_calibration();
 }
 
 QWidget* StudioWindow::create_robot_viewport() {
@@ -371,6 +374,11 @@ QWidget* StudioWindow::make_program_panel() {
   validation_label_->setObjectName("validationSummary");
   layout->addWidget(validation_label_);
 
+  // Collision status (self-collision + floor over the sampled trajectory).
+  collision_label_ = new QLabel;
+  collision_label_->setObjectName("collisionSummary");
+  layout->addWidget(collision_label_);
+
   // Add-step buttons: teach motion from the current pose/joints, or insert
   // Wait/Tool steps. MoveC needs a via first (Set via), then Add MoveC.
   auto* add_grid = new QGridLayout;
@@ -500,6 +508,12 @@ void StudioWindow::refresh_program() {
     const bool ok = controller_->programValid();
     validation_label_->setStyleSheet(ok ? "color:#46f0a0;" : "color:#ff6b6b; font-weight:bold;");
   }
+  if (collision_label_) {
+    const QString summary = controller_->collisionSummary();
+    collision_label_->setText("Collisions: " + summary);
+    const bool clean = summary.contains("no collision") || summary.contains("no steps");
+    collision_label_->setStyleSheet(clean ? "color:#46f0a0;" : "color:#ff6b6b; font-weight:bold;");
+  }
 }
 
 void StudioWindow::refresh_saved_programs() {
@@ -609,12 +623,44 @@ QWidget* StudioWindow::make_telemetry_panel() {
 
 QWidget* StudioWindow::make_calibration_panel() {
   auto* panel = new QWidget;
-  auto* layout = new QFormLayout(panel);
-  layout->addRow("Camera Intrinsics", value_label("cam_01_intrinsics.yaml"));
-  layout->addRow("Hand-Eye", value_label("he_2025_05_10.yaml"));
-  layout->addRow("Reprojection Error", value_label("0.42 px"));
-  layout->addRow("Status", value_label("Valid"));
+  auto* layout = new QVBoxLayout(panel);
+
+  auto* form = new QFormLayout;
+  form->addRow("Camera Intrinsics", value_label("cam_01_intrinsics.yaml"));
+  form->addRow("Hand-Eye", value_label("he_2025_05_10.yaml"));
+  form->addRow("Reprojection Error", value_label("0.42 px"));
+  form->addRow("Status", value_label("Valid"));
+  layout->addLayout(form);
+
+  layout->addWidget(horizontal_rule());
+
+  // Vision-guided seam correction: the live scan is placed in the base frame via
+  // the hand-eye extrinsics and compared to the planned seam. The read-out updates
+  // each telemetry tick; Apply shifts the program's Cartesian targets by the offset.
+  auto* vision_title = new QLabel("Vision guidance");
+  vision_title->setStyleSheet("font-weight:bold;");
+  layout->addWidget(vision_title);
+
+  vision_label_ = new QLabel("no live scan — press Run Demo");
+  vision_label_->setObjectName("visionSummary");
+  vision_label_->setWordWrap(true);
+  layout->addWidget(vision_label_);
+
+  auto* apply_seam = new QPushButton("Apply seam correction");
+  connect(apply_seam, &QPushButton::clicked, this, [this] {
+    controller_->applySeamCorrection();
+    refresh_calibration();
+  });
+  layout->addWidget(apply_seam);
+
+  layout->addStretch();
   return panel;
+}
+
+void StudioWindow::refresh_calibration() {
+  if (!controller_ || !vision_label_) return;
+  vision_label_->setText(controller_->visionSummary());
+  vision_label_->setStyleSheet(controller_->hasScan() ? "color:#7fd0ff;" : "color:#8b96a0;");
 }
 
 QWidget* StudioWindow::make_jog_panel() {
