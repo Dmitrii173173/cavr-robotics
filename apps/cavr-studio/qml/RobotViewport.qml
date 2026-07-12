@@ -21,6 +21,13 @@ Item {
     property var jointAxis: ["y", "x", "x", "z", "x", "z"]
     property var tcpNode: null
     property real phase: 0
+    property var visualFeatures: root.useTelemetry ? robot.visualFeatures : []
+    property var visualZones: root.useTelemetry ? robot.visualZones : []
+    property var visualPointCloud: root.useTelemetry ? robot.visualPointCloud : []
+    property var visualPathSegments: root.useTelemetry ? robot.visualPathSegments : []
+    property var visualDiagnostics: root.useTelemetry ? robot.visualDiagnostics : []
+
+    function primitiveScale(v) { return Math.max(v / 100.0, 0.00025) }
 
     // studio backdrop (View3D draws transparently over this)
     Rectangle {
@@ -115,6 +122,141 @@ Item {
             }
         }
 
+        // Demo workpiece: simple welded steel fixture used when there is no scan.
+        Node {
+            id: workpiece
+            Model {
+                source: "#Cube"
+                position: Qt.vector3d(0.64, -0.07, 0.38)
+                scale: Qt.vector3d(root.primitiveScale(0.46), root.primitiveScale(0.30), root.primitiveScale(0.10))
+                receivesShadows: true
+                castsShadows: true
+                materials: PrincipledMaterial {
+                    baseColor: "#586270"
+                    metalness: 0.85
+                    roughness: 0.42
+                }
+            }
+            Model {
+                source: "#Cube"
+                position: Qt.vector3d(0.64, 0.05, 0.46)
+                scale: Qt.vector3d(root.primitiveScale(0.38), root.primitiveScale(0.05), root.primitiveScale(0.16))
+                receivesShadows: true
+                castsShadows: true
+                materials: PrincipledMaterial {
+                    baseColor: "#4b5563"
+                    metalness: 0.8
+                    roughness: 0.38
+                }
+            }
+        }
+
+        // Transparent process zones: work envelope, slowdown, weld window,
+        // forbidden clamp volume, safety boundary.
+        Repeater3D {
+            model: root.visualZones
+            delegate: Model {
+                source: "#Cube"
+                position: Qt.vector3d(modelData.x, modelData.y, modelData.z)
+                scale: Qt.vector3d(root.primitiveScale(modelData.sx),
+                                   root.primitiveScale(modelData.sy),
+                                   root.primitiveScale(modelData.sz))
+                pickable: false
+                materials: PrincipledMaterial {
+                    baseColor: modelData.color
+                    alphaMode: PrincipledMaterial.Blend
+                    opacity: modelData.type === "forbidden" ? 0.28 : 0.15
+                    roughness: 0.65
+                    metalness: 0.0
+                }
+            }
+        }
+
+        // Imported/demo point cloud, kept lightweight for interactive editing.
+        Repeater3D {
+            model: root.visualPointCloud
+            delegate: Model {
+                source: "#Sphere"
+                position: Qt.vector3d(modelData.x, modelData.y, modelData.z)
+                scale: Qt.vector3d(root.primitiveScale(0.012),
+                                   root.primitiveScale(0.012),
+                                   root.primitiveScale(0.012))
+                pickable: false
+                materials: PrincipledMaterial {
+                    baseColor: "#8fb8ff"
+                    alphaMode: PrincipledMaterial.Blend
+                    opacity: 0.55
+                    roughness: 0.3
+                }
+            }
+        }
+
+        // Selectable weld features: lines, edges, contours and face-derived paths.
+        Repeater3D {
+            model: root.visualFeatures
+            delegate: Model {
+                property int featureIndex: modelData.index
+                source: "#Cube"
+                position: Qt.vector3d(modelData.cx, modelData.cy, modelData.cz + 0.006)
+                eulerRotation: Qt.vector3d(0, 0, modelData.yaw)
+                scale: Qt.vector3d(root.primitiveScale(modelData.length),
+                                   root.primitiveScale(modelData.selected ? 0.030 : modelData.width),
+                                   root.primitiveScale(modelData.selected ? 0.030 : modelData.width))
+                pickable: true
+                materials: PrincipledMaterial {
+                    baseColor: modelData.selected ? "#fff06a"
+                              : modelData.hasOperation ? "#29d47d"
+                              : modelData.kind === "face" ? "#b45cff" : "#65b7ff"
+                    emissiveFactor: modelData.selected ? Qt.vector3d(0.45, 0.36, 0.05)
+                                                        : Qt.vector3d(0.02, 0.05, 0.08)
+                    roughness: 0.22
+                    metalness: 0.0
+                }
+            }
+        }
+
+        // Compiled robot path phases. Timeline is a readout of these generated
+        // phases: move, approach, weld/process, retract.
+        Repeater3D {
+            model: root.visualPathSegments
+            delegate: Model {
+                source: "#Cube"
+                position: Qt.vector3d(modelData.x, modelData.y, modelData.z + 0.018)
+                eulerRotation: Qt.vector3d(0, -modelData.pitch, modelData.yaw)
+                scale: Qt.vector3d(root.primitiveScale(modelData.length),
+                                   root.primitiveScale(modelData.selected ? 0.020 : 0.012),
+                                   root.primitiveScale(modelData.selected ? 0.020 : 0.012))
+                pickable: false
+                materials: PrincipledMaterial {
+                    baseColor: modelData.color
+                    emissiveFactor: modelData.phase === "weld"
+                                    ? Qt.vector3d(0.02, 0.22, 0.08)
+                                    : Qt.vector3d(0.03, 0.05, 0.08)
+                    roughness: 0.25
+                }
+            }
+        }
+
+        // Diagnostic markers are spatial, so the operator can see why validation
+        // failed without hunting through a log.
+        Repeater3D {
+            model: root.visualDiagnostics
+            delegate: Model {
+                source: "#Sphere"
+                position: Qt.vector3d(modelData.x, modelData.y, modelData.z + 0.045)
+                scale: Qt.vector3d(root.primitiveScale(modelData.severity === "error" ? 0.040 : 0.030),
+                                   root.primitiveScale(modelData.severity === "error" ? 0.040 : 0.030),
+                                   root.primitiveScale(modelData.severity === "error" ? 0.040 : 0.030))
+                pickable: false
+                materials: PrincipledMaterial {
+                    baseColor: modelData.severity === "error" ? "#ff4d5e" : "#ffb020"
+                    emissiveFactor: modelData.severity === "error"
+                                    ? Qt.vector3d(0.35, 0.03, 0.05)
+                                    : Qt.vector3d(0.28, 0.12, 0.02)
+                }
+            }
+        }
+
         // ---- tuned materials (replace the glTF-baked ones) ----
         PrincipledMaterial {
             id: paintOrange
@@ -158,6 +300,25 @@ Item {
             origin: camOrigin
             camera: camera
             panEnabled: true
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.LeftButton
+            propagateComposedEvents: true
+            onClicked: function(mouse) {
+                if (!root.useTelemetry) {
+                    mouse.accepted = false
+                    return
+                }
+                var hit = view.pick(mouse.x, mouse.y)
+                if (hit.objectHit && hit.objectHit.featureIndex !== undefined) {
+                    robot.selectVisualFeature(hit.objectHit.featureIndex)
+                    mouse.accepted = true
+                } else {
+                    mouse.accepted = false
+                }
+            }
         }
     }
 
@@ -259,6 +420,13 @@ Item {
     Connections {
         target: root.useTelemetry ? robot : null
         function onTelemetryChanged() { root.applyTelemetry() }
+        function onVisualProgramChanged() {
+            root.visualFeatures = robot.visualFeatures
+            root.visualZones = robot.visualZones
+            root.visualPointCloud = robot.visualPointCloud
+            root.visualPathSegments = robot.visualPathSegments
+            root.visualDiagnostics = robot.visualDiagnostics
+        }
     }
 
     function setJoint(i, deg) {
@@ -304,6 +472,37 @@ Item {
                   ? ("GP25  ·  " + robot.programState + "  ·  " + robot.stepLabel +
                      (robot.weldActive ? "  ·  ◆ WELD" : ""))
                   : "Yaskawa GP25  ·  6-axis  ·  drag to orbit"
+        }
+    }
+
+    Rectangle {
+        anchors { right: parent.right; top: parent.top; margins: 12 }
+        color: "#cc111821"; border.color: "#2b3947"; radius: 6
+        width: 320; height: sceneLegend.implicitHeight + 22
+        Column {
+            id: sceneLegend
+            anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 12 }
+            spacing: 5
+            Text {
+                color: "#e6ecf2"
+                font.pixelSize: 13
+                font.bold: true
+                text: "Visual OLP editor"
+            }
+            Text {
+                color: "#9fb0c0"
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+                width: parent.width
+                text: root.useTelemetry
+                      ? "Click a highlighted seam/edge/face, tune operation parameters, then create a compiled robot path."
+                      : "Load a controller to enable geometry selection."
+            }
+            Text {
+                color: "#79d98f"
+                font.pixelSize: 12
+                text: "green path = weld/process, blue = approach, amber = retract"
+            }
         }
     }
 }

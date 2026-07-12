@@ -9,7 +9,9 @@ class QListWidget;
 class QLineEdit;
 class QComboBox;
 class QTableWidget;
+class QTreeWidget;
 class RobotController;
+class QDoubleSpinBox;
 
 class StudioWindow final : public QMainWindow {
  public:
@@ -37,15 +39,31 @@ class StudioWindow final : public QMainWindow {
   QListWidget* program_list_{nullptr};    // editable program steps
   QListWidget* saved_programs_list_{nullptr};  // saved jobs in the DB
   QLineEdit* program_name_{nullptr};      // name field for saving a job
+  QTreeWidget* visual_tree_{nullptr};
+  QListWidget* validation_list_{nullptr};
+  QLabel* selected_feature_label_{nullptr};
+  QComboBox* operation_type_{nullptr};
+  QComboBox* operation_direction_{nullptr};
+  QComboBox* weld_mode_{nullptr};
+  QDoubleSpinBox* operation_speed_{nullptr};
+  QDoubleSpinBox* torch_angle_{nullptr};
+  QDoubleSpinBox* standoff_{nullptr};
+  QDoubleSpinBox* approach_{nullptr};
+  QDoubleSpinBox* retract_{nullptr};
   void refresh_robots();
   void refresh_io();       // live IO values + writable-channel list, on each telemetry tick
   void refresh_program();  // editable step list
   void refresh_saved_programs();  // saved-jobs list from the DB
+  void refresh_visual_program();
+  void push_visual_params();
   void update_pendant();   // refresh the pendant LCD read-out on each telemetry tick
 
   [[nodiscard]] QDockWidget* make_dock(const QString& title, QWidget* widget);
   [[nodiscard]] QWidget* make_robots_panel();
   [[nodiscard]] QWidget* make_program_panel();
+  [[nodiscard]] QWidget* make_visual_program_panel();
+  [[nodiscard]] QWidget* make_operation_panel();
+  [[nodiscard]] QWidget* make_validation_panel();
   [[nodiscard]] QWidget* make_session_panel();
   [[nodiscard]] QWidget* make_channels_panel();
   [[nodiscard]] QWidget* make_events_panel();

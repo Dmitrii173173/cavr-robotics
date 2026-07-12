@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ProgramDocument.hpp"
+#include "VisualProgramModel.hpp"
 
 // Bridge between the runtime session layer and the Qt/QML UI. It drives the demo
 // welding workflow through a SessionManager + mock controller and republishes the
@@ -13,6 +14,7 @@
 #include <QStringList>
 #include <QTimer>
 #include <QVariantList>
+#include <QVariantMap>
 
 #include <cavr/adapter_sdk/controller_adapter.hpp>
 #include <cavr/adapters/generic_tcp_robot/generic_tcp_controller.hpp>
@@ -41,6 +43,13 @@ class RobotController final : public QObject {
   Q_PROPERTY(QVariantList tcpCoords READ tcpCoords NOTIFY telemetryChanged)
   Q_PROPERTY(QString coordSystem READ coordSystem NOTIFY telemetryChanged)
   Q_PROPERTY(int selectedProgramStep READ selectedProgramStep NOTIFY programSelectionChanged)
+  Q_PROPERTY(QVariantList visualFeatures READ visualFeatures NOTIFY visualProgramChanged)
+  Q_PROPERTY(QVariantList visualZones READ visualZones NOTIFY visualProgramChanged)
+  Q_PROPERTY(QVariantList visualPointCloud READ visualPointCloud NOTIFY visualProgramChanged)
+  Q_PROPERTY(QVariantList visualOperations READ visualOperations NOTIFY visualProgramChanged)
+  Q_PROPERTY(QVariantList visualPathSegments READ visualPathSegments NOTIFY visualProgramChanged)
+  Q_PROPERTY(QVariantList visualDiagnostics READ visualDiagnostics NOTIFY visualProgramChanged)
+  Q_PROPERTY(QVariantMap visualOperationParams READ visualOperationParams NOTIFY visualProgramChanged)
 
  public:
   explicit RobotController(QObject* parent = nullptr);
@@ -55,6 +64,13 @@ class RobotController final : public QObject {
   [[nodiscard]] QVariantList tcpCoords() const { return tcp_coords_; }
   [[nodiscard]] QString coordSystem() const { return coord_system_name_; }
   [[nodiscard]] int selectedProgramStep() const { return program_.selected_step(); }
+  [[nodiscard]] QVariantList visualFeatures() const { return visual_program_.features(); }
+  [[nodiscard]] QVariantList visualZones() const { return visual_program_.zones(); }
+  [[nodiscard]] QVariantList visualPointCloud() const { return visual_program_.point_cloud(); }
+  [[nodiscard]] QVariantList visualOperations() const { return visual_program_.operations(); }
+  [[nodiscard]] QVariantList visualPathSegments() const { return visual_program_.path_segments(); }
+  [[nodiscard]] QVariantList visualDiagnostics() const { return visual_program_.diagnostics(); }
+  [[nodiscard]] QVariantMap visualOperationParams() const { return visual_program_.operation_params(); }
 
   Q_INVOKABLE void start();
   Q_INVOKABLE void pause();
@@ -98,6 +114,20 @@ class RobotController final : public QObject {
   Q_INVOKABLE QVariantList programSteps() const;    // [{index, kind, detail}]
   Q_INVOKABLE void selectProgramStep(int index);
 
+  // Visual offline-programming layer. Geometry selection and operation parameters
+  // live above ProgramDocument, then compile down to normal MotionCommand steps.
+  Q_INVOKABLE void loadDemoWorkpiece();
+  Q_INVOKABLE void selectVisualFeature(int index);
+  Q_INVOKABLE void selectVisualOperation(int index);
+  Q_INVOKABLE void setVisualOperationParams(const QString& type, double speed_mm_s,
+                                            double torch_angle_deg, double standoff_mm,
+                                            double approach_mm, double retract_mm,
+                                            const QString& direction,
+                                            const QString& weld_mode);
+  Q_INVOKABLE void createVisualOperation();
+  Q_INVOKABLE void clearVisualOperations();
+  Q_INVOKABLE void runVisualSimulation();
+
   // Saved jobs in the DB.
   Q_INVOKABLE QVariantList savedPrograms() const;   // [{id, name, steps}]
   Q_INVOKABLE void saveProgram(const QString& name);
@@ -128,6 +158,7 @@ class RobotController final : public QObject {
   void programChanged();          // the editable step list changed
   void savedProgramsChanged();    // the DB list of saved jobs changed
   void programSelectionChanged();  // selected step in list/timeline changed
+  void visualProgramChanged();    // geometry, operations, zones, paths, or diagnostics changed
 
  private:
   void tick();
@@ -152,6 +183,7 @@ class RobotController final : public QObject {
   double speed_mm_s_{50.0};  // Cartesian jog speed
   cavr::runtime::SessionManager manager_;
   ProgramDocument program_;
+  VisualProgramModel visual_program_;
   bool running_current_program_{false};
   QTimer timer_;
   std::int64_t now_ns_{1'000'000'000};

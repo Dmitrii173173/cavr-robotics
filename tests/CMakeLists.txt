@@ -116,6 +116,52 @@ target_link_libraries(cavr_runtime_workflow_test
 
 add_test(NAME cavr_runtime_workflow_test COMMAND cavr_runtime_workflow_test)
 
+add_executable(cavr_program_document_test
+  program_document_test.cpp
+  ${CMAKE_SOURCE_DIR}/apps/cavr-studio/src/ProgramDocument.cpp
+)
+
+target_include_directories(cavr_program_document_test
+  PRIVATE
+    ${CMAKE_SOURCE_DIR}/apps/cavr-studio/src
+)
+
+target_link_libraries(cavr_program_document_test
+  PRIVATE
+    CAVR::runtime
+    CAVR::machine
+    CAVR::core
+)
+
+add_test(NAME cavr_program_document_test COMMAND cavr_program_document_test)
+
+find_package(Qt6 QUIET COMPONENTS Core)
+if(Qt6_FOUND)
+  add_executable(cavr_visual_program_model_test
+    visual_program_model_test.cpp
+    ${CMAKE_SOURCE_DIR}/apps/cavr-studio/src/VisualProgramModel.cpp
+  )
+
+  target_include_directories(cavr_visual_program_model_test
+    PRIVATE
+      ${CMAKE_SOURCE_DIR}/apps/cavr-studio/src
+  )
+
+  target_link_libraries(cavr_visual_program_model_test
+    PRIVATE
+      Qt6::Core
+      CAVR::machine
+      CAVR::core
+  )
+
+  add_test(
+    NAME cavr_visual_program_model_test
+    COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:cavr_visual_program_model_test>
+  )
+endif()
+
 add_executable(cavr_record_recording_test
   record_recording_test.cpp
 )

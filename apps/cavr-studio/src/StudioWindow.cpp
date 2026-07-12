@@ -29,6 +29,7 @@
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QTableWidget>
+#include <QTreeWidget>
 #include <QColor>
 #include <QToolBar>
 #include <QVariant>
@@ -82,6 +83,8 @@ StudioWindow::StudioWindow(QWidget* parent) : QMainWindow(parent) {
   connect(controller_, &RobotController::programSelectionChanged, this, [this] { refresh_program(); });
   connect(controller_, &RobotController::savedProgramsChanged, this,
           [this] { refresh_saved_programs(); });
+  connect(controller_, &RobotController::visualProgramChanged, this,
+          [this] { refresh_visual_program(); });
   // Each telemetry tick refreshes the live IO values and the pendant read-out.
   connect(controller_, &RobotController::telemetryChanged, this, [this] {
     refresh_io();
@@ -90,6 +93,7 @@ StudioWindow::StudioWindow(QWidget* parent) : QMainWindow(parent) {
   refresh_robots();
   refresh_program();
   refresh_saved_programs();
+  refresh_visual_program();
   update_pendant();
 }
 
@@ -141,6 +145,7 @@ void StudioWindow::create_docks() {
   setTabPosition(Qt::AllDockWidgetAreas, QTabWidget::North);
 
   auto* robots = make_dock("Robots", make_robots_panel());
+  auto* visual_program = make_dock("Program Tree", make_visual_program_panel());
   auto* jog = make_dock("Jog + Tools", make_jog_panel());
   auto* program = make_dock("Program", make_program_panel());
   auto* session = make_dock("Session", make_session_panel());
@@ -148,39 +153,44 @@ void StudioWindow::create_docks() {
   auto* calibration = make_dock("Calibration", make_calibration_panel());
 
   auto* camera = make_dock("Camera", new CameraView(this));
+  auto* operation = make_dock("Operation Parameters", make_operation_panel());
   auto* telemetry = make_dock("Telemetry", make_telemetry_panel());
   auto* faults = make_dock("Faults", make_fault_panel());
 
   auto* events = make_dock("Events", make_events_panel());
   auto* timeline = make_dock("Timeline", new TimelineWidget(controller_, this));
+  auto* validation = make_dock("Validation", make_validation_panel());
 
   // Left group: robot registry, jog/tools, session, channels, calibration.
-  addDockWidget(Qt::LeftDockWidgetArea, robots);
-  for (auto* d : {jog, program, session, channels, calibration}) {
+  addDockWidget(Qt::LeftDockWidgetArea, visual_program);
+  for (auto* d : {robots, jog, program, session, channels, calibration}) {
     addDockWidget(Qt::LeftDockWidgetArea, d);
-    tabifyDockWidget(robots, d);
+    tabifyDockWidget(visual_program, d);
   }
 
-  // Right group: camera view, telemetry, fault injection.
-  addDockWidget(Qt::RightDockWidgetArea, camera);
-  for (auto* d : {telemetry, faults}) {
+  // Right group: operation authoring first, camera/telemetry/faults still available.
+  addDockWidget(Qt::RightDockWidgetArea, operation);
+  for (auto* d : {camera, telemetry, faults}) {
     addDockWidget(Qt::RightDockWidgetArea, d);
-    tabifyDockWidget(camera, d);
+    tabifyDockWidget(operation, d);
   }
 
   // Bottom group: events log and the timeline.
-  addDockWidget(Qt::BottomDockWidgetArea, events);
   addDockWidget(Qt::BottomDockWidgetArea, timeline);
+  for (auto* d : {validation, events}) {
+    addDockWidget(Qt::BottomDockWidgetArea, d);
+    tabifyDockWidget(timeline, d);
+  }
   tabifyDockWidget(events, timeline);
   timeline->setMinimumHeight(200);
 
   // Open each group on its primary tab.
-  robots->raise();
-  camera->raise();
-  events->raise();
+  visual_program->raise();
+  operation->raise();
+  timeline->raise();
 
   // Give the 3D viewport the lion's share of width, like the VS editor area.
-  resizeDocks({robots, camera}, {340, 380}, Qt::Horizontal);
+  resizeDocks({visual_program, operation}, {360, 420}, Qt::Horizontal);
 }
 
 QDockWidget* StudioWindow::make_dock(const QString& title, QWidget* widget) {
@@ -490,6 +500,276 @@ void StudioWindow::refresh_saved_programs() {
         QString("%1  (%2 steps)").arg(m.value("name").toString()).arg(m.value("steps").toInt()),
         saved_programs_list_);
     item->setData(Qt::UserRole, m.value("id"));
+  }
+}
+
+QWidget* StudioWindow::make_visual_program_panel() {
+  auto* panel = new QWidget;
+  auto* layout = new QVBoxLayout(panel);
+
+  auto* title = new QLabel("Visual robot program");
+  title->setObjectName("sectionLabel");
+  layout->addWidget(title);
+
+  auto* hint = new QLabel("Pick geometry in the 3D scene. Operations compile into robot motion steps and the timeline only displays the result.");
+  hint->setObjectName("hintLabel");
+  hint->setWordWrap(true);
+  layout->addWidget(hint);
+
+  auto* top = new QHBoxLayout;
+  auto* load_demo = new QPushButton("Load Demo Part");
+  auto* create = new QPushButton("Create Operation");
+  create->setObjectName("primaryButton");
+  connect(load_demo, &QPushButton::clicked, this, [this] { controller_->loadDemoWorkpiece(); });
+  connect(create, &QPushButton::clicked, this, [this] { controller_->createVisualOperation(); });
+  top->addWidget(load_demo);
+  top->addWidget(create);
+  layout->addLayout(top);
+
+  visual_tree_ = new QTreeWidget;
+  visual_tree_->setHeaderLabels({"Stage / object", "Status"});
+  visual_tree_->setAlternatingRowColors(true);
+  visual_tree_->setRootIsDecorated(true);
+  visual_tree_->setSelectionMode(QAbstractItemView::SingleSelection);
+  layout->addWidget(visual_tree_, 1);
+  connect(visual_tree_, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem* item, int) {
+    if (!item || !controller_) return;
+    const QString type = item->data(0, Qt::UserRole).toString();
+    const int index = item->data(0, Qt::UserRole + 1).toInt();
+    if (type == "feature") controller_->selectVisualFeature(index);
+    if (type == "operation") controller_->selectVisualOperation(index);
+  });
+
+  auto* run_row = new QHBoxLayout;
+  auto* simulate = new QPushButton("Simulate Path");
+  simulate->setObjectName("primaryButton");
+  auto* clear = new QPushButton("Clear Visual Program");
+  clear->setObjectName("dangerButton");
+  connect(simulate, &QPushButton::clicked, this, [this] { controller_->runVisualSimulation(); });
+  connect(clear, &QPushButton::clicked, this, [this] { controller_->clearVisualOperations(); });
+  run_row->addWidget(simulate);
+  run_row->addWidget(clear);
+  layout->addLayout(run_row);
+
+  return panel;
+}
+
+QWidget* StudioWindow::make_operation_panel() {
+  auto* panel = new QWidget;
+  auto* layout = new QVBoxLayout(panel);
+
+  auto* title = new QLabel("Operation authoring");
+  title->setObjectName("sectionLabel");
+  layout->addWidget(title);
+
+  selected_feature_label_ = new QLabel("Selected geometry: -");
+  selected_feature_label_->setWordWrap(true);
+  layout->addWidget(selected_feature_label_);
+
+  auto* form = new QFormLayout;
+  operation_type_ = new QComboBox;
+  operation_type_->addItems({"Weld seam", "Travel move", "Surface scan", "Dry run"});
+  operation_direction_ = new QComboBox;
+  operation_direction_->addItems({"Forward", "Reverse"});
+  weld_mode_ = new QComboBox;
+  weld_mode_->addItems({"Pulse MIG", "Short Arc", "TIG", "Laser Track", "No weld"});
+
+  operation_speed_ = new QDoubleSpinBox;
+  operation_speed_->setRange(1.0, 2500.0);
+  operation_speed_->setValue(120.0);
+  operation_speed_->setSuffix(" mm/s");
+
+  torch_angle_ = new QDoubleSpinBox;
+  torch_angle_->setRange(-80.0, 80.0);
+  torch_angle_->setValue(15.0);
+  torch_angle_->setSuffix(" deg");
+
+  standoff_ = new QDoubleSpinBox;
+  standoff_->setRange(0.0, 200.0);
+  standoff_->setValue(12.0);
+  standoff_->setSuffix(" mm");
+
+  approach_ = new QDoubleSpinBox;
+  approach_->setRange(0.0, 500.0);
+  approach_->setValue(80.0);
+  approach_->setSuffix(" mm");
+
+  retract_ = new QDoubleSpinBox;
+  retract_->setRange(0.0, 500.0);
+  retract_->setValue(90.0);
+  retract_->setSuffix(" mm");
+
+  form->addRow("Type", operation_type_);
+  form->addRow("Direction", operation_direction_);
+  form->addRow("Weld mode", weld_mode_);
+  form->addRow("Travel speed", operation_speed_);
+  form->addRow("Torch angle", torch_angle_);
+  form->addRow("Standoff", standoff_);
+  form->addRow("Safe approach", approach_);
+  form->addRow("Safe retract", retract_);
+  layout->addLayout(form);
+
+  const auto connect_params = [this](auto* widget) {
+    connect(widget, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this] { push_visual_params(); });
+  };
+  connect_params(operation_type_);
+  connect_params(operation_direction_);
+  connect_params(weld_mode_);
+  for (auto* s : {operation_speed_, torch_angle_, standoff_, approach_, retract_}) {
+    connect(s, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+            [this] { push_visual_params(); });
+  }
+
+  layout->addWidget(horizontal_rule());
+  auto* process_hint = new QLabel("Generated phases: move to safe approach, approach, weld/process, retract. Validation checks reach, zones, standoff and process window.");
+  process_hint->setObjectName("hintLabel");
+  process_hint->setWordWrap(true);
+  layout->addWidget(process_hint);
+
+  auto* buttons = new QHBoxLayout;
+  auto* create = new QPushButton("Create From Selection");
+  create->setObjectName("primaryButton");
+  auto* simulate = new QPushButton("Run Simulation");
+  connect(create, &QPushButton::clicked, this, [this] { controller_->createVisualOperation(); });
+  connect(simulate, &QPushButton::clicked, this, [this] { controller_->runVisualSimulation(); });
+  buttons->addWidget(create);
+  buttons->addWidget(simulate);
+  layout->addLayout(buttons);
+  layout->addStretch();
+
+  return panel;
+}
+
+QWidget* StudioWindow::make_validation_panel() {
+  auto* panel = new QWidget;
+  auto* layout = new QVBoxLayout(panel);
+  auto* row = new QHBoxLayout;
+  auto* title = new QLabel("Validation and engineering checks");
+  title->setObjectName("sectionLabel");
+  auto* reload = new QPushButton("Re-check");
+  connect(reload, &QPushButton::clicked, this, [this] { push_visual_params(); });
+  row->addWidget(title, 1);
+  row->addWidget(reload);
+  layout->addLayout(row);
+
+  validation_list_ = new QListWidget;
+  validation_list_->setAlternatingRowColors(true);
+  layout->addWidget(validation_list_);
+  return panel;
+}
+
+void StudioWindow::push_visual_params() {
+  if (!controller_ || !operation_type_ || !operation_speed_) return;
+  controller_->setVisualOperationParams(operation_type_->currentText(),
+                                        operation_speed_->value(),
+                                        torch_angle_->value(),
+                                        standoff_->value(),
+                                        approach_->value(),
+                                        retract_->value(),
+                                        operation_direction_->currentText(),
+                                        weld_mode_->currentText());
+}
+
+void StudioWindow::refresh_visual_program() {
+  if (!controller_) return;
+
+  const QVariantMap params = controller_->visualOperationParams();
+  if (selected_feature_label_) {
+    const QString feature_name = params.value("featureName").toString().isEmpty()
+                                     ? QString("-")
+                                     : params.value("featureName").toString();
+    const QString feature_kind = params.value("featureKind").toString().isEmpty()
+                                     ? QString("-")
+                                     : params.value("featureKind").toString();
+    selected_feature_label_->setText(
+        QString("Selected geometry: %1 (%2)")
+            .arg(feature_name, feature_kind));
+  }
+
+  if (operation_type_) {
+    const QSignalBlocker b0(operation_type_);
+    const QSignalBlocker b1(operation_direction_);
+    const QSignalBlocker b2(weld_mode_);
+    const QSignalBlocker b3(operation_speed_);
+    const QSignalBlocker b4(torch_angle_);
+    const QSignalBlocker b5(standoff_);
+    const QSignalBlocker b6(approach_);
+    const QSignalBlocker b7(retract_);
+    auto set_combo = [](QComboBox* combo, const QString& text) {
+      const int idx = combo->findText(text);
+      if (idx >= 0) combo->setCurrentIndex(idx);
+    };
+    set_combo(operation_type_, params.value("type").toString());
+    set_combo(operation_direction_, params.value("direction").toString());
+    set_combo(weld_mode_, params.value("weldMode").toString());
+    operation_speed_->setValue(params.value("speed").toDouble());
+    torch_angle_->setValue(params.value("torchAngle").toDouble());
+    standoff_->setValue(params.value("standoff").toDouble());
+    approach_->setValue(params.value("approach").toDouble());
+    retract_->setValue(params.value("retract").toDouble());
+  }
+
+  if (visual_tree_) {
+    const QSignalBlocker blocker(visual_tree_);
+    visual_tree_->clear();
+
+    auto* geometry = new QTreeWidgetItem(visual_tree_, {"Demo workpiece geometry", "select in 3D"});
+    for (const QVariant& entry : controller_->visualFeatures()) {
+      const QVariantMap f = entry.toMap();
+      auto* item = new QTreeWidgetItem(
+          geometry,
+          {QString("%1. %2 [%3]")
+               .arg(f.value("index").toInt() + 1)
+               .arg(f.value("name").toString(), f.value("kind").toString()),
+           f.value("selected").toBool() ? "selected"
+                                         : f.value("hasOperation").toBool() ? "planned" : "candidate"});
+      item->setData(0, Qt::UserRole, "feature");
+      item->setData(0, Qt::UserRole + 1, f.value("index").toInt());
+    }
+
+    auto* prep = new QTreeWidgetItem(visual_tree_, {"Preparation", "home / tool / zones"});
+    prep->addChild(new QTreeWidgetItem({"Load demo part and point cloud", "ready"}));
+    prep->addChild(new QTreeWidgetItem({"Validate work, slow, weld, forbidden and safety zones", "active"}));
+
+    auto* ops_root = new QTreeWidgetItem(visual_tree_, {"Compiled operations", "3D -> job"});
+    for (const QVariant& entry : controller_->visualOperations()) {
+      const QVariantMap op = entry.toMap();
+      auto* item = new QTreeWidgetItem(
+          ops_root,
+          {QString("%1. %2").arg(op.value("index").toInt() + 1).arg(op.value("name").toString()),
+           QString("%1 s").arg(op.value("duration").toDouble(), 0, 'f', 2)});
+      item->setData(0, Qt::UserRole, "operation");
+      item->setData(0, Qt::UserRole + 1, op.value("index").toInt());
+      item->addChild(new QTreeWidgetItem({"Move to safe approach", "move"}));
+      item->addChild(new QTreeWidgetItem({"Approach selected geometry", "approach"}));
+      item->addChild(new QTreeWidgetItem({op.value("type").toString(), op.value("weldMode").toString()}));
+      item->addChild(new QTreeWidgetItem({"Retract to safe exit", "retract"}));
+    }
+
+    auto* finish = new QTreeWidgetItem(visual_tree_, {"Completion", "ready for export"});
+    finish->addChild(new QTreeWidgetItem({"Robot adapter / simulator / code generator handoff", "planned"}));
+    visual_tree_->expandAll();
+    visual_tree_->resizeColumnToContents(0);
+  }
+
+  if (validation_list_) {
+    validation_list_->clear();
+    const QVariantList diagnostics = controller_->visualDiagnostics();
+    if (diagnostics.empty()) {
+      validation_list_->addItem("OK | No blocking visual-program issues detected.");
+    }
+    for (const QVariant& entry : diagnostics) {
+      const QVariantMap d = entry.toMap();
+      auto* item = new QListWidgetItem(
+          QString("%1 | %2 | %3")
+              .arg(d.value("severity").toString().toUpper(),
+                   d.value("code").toString(),
+                   d.value("message").toString()),
+          validation_list_);
+      item->setForeground(d.value("severity").toString() == "error" ? QColor("#ff6b72")
+                                                                     : QColor("#ffcf70"));
+    }
   }
 }
 
@@ -858,7 +1138,7 @@ void StudioWindow::apply_theme() {
       text-transform: uppercase;
       border-bottom: 1px solid #2b3947;
     }
-    QListWidget, QTableWidget, QLineEdit, QComboBox {
+    QListWidget, QTreeWidget, QTableWidget, QLineEdit, QComboBox, QDoubleSpinBox {
       background: #18212b;
       alternate-background-color: #1c2631;
       border: 1px solid #2b3947;
@@ -873,6 +1153,18 @@ void StudioWindow::apply_theme() {
     }
     QPushButton:hover, QToolButton:hover {
       border-color: #4d9dff;
+    }
+    QPushButton#primaryButton {
+      background: #1167d8;
+      border-color: #5aa8ff;
+      color: #ffffff;
+      font-weight: 700;
+    }
+    QPushButton#dangerButton {
+      background: #5c1f24;
+      border-color: #ff5a66;
+      color: #ffe8ea;
+      font-weight: 700;
     }
     QHeaderView::section {
       background: #1c2631;

@@ -19,6 +19,8 @@ add_executable(cavr-studio
   src/StudioWindow.hpp
   src/TimelineWidget.cpp
   src/TimelineWidget.hpp
+  src/VisualProgramModel.cpp
+  src/VisualProgramModel.hpp
   src/main.cpp
   cavr_studio.qrc
 )

@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -487,8 +488,10 @@ void RobotController::moveStep(int index, int delta) {
 
 void RobotController::clearProgram() {
   program_.clear();
+  visual_program_.clear_operations();
   running_current_program_ = false;
   emit eventLogged("program | cleared");
+  emit visualProgramChanged();
   emit programSelectionChanged();
   emit programChanged();
 }
@@ -512,8 +515,32 @@ QVariantList RobotController::programSteps() const {
   QVariantList out;
   const int active = running_current_program_ ? manager_.latest().current_step : -1;
   const cavr::machine::MotionTask& task = program_.task();
+  std::optional<cavr::core::Pose3D> previous_pose;
   for (std::size_t i = 0; i < task.size(); ++i) {
     const auto& c = task[i];
+    double duration = 0.25;
+    if (c.kind == cavr::machine::MotionKind::Wait) {
+      duration = std::max(0.15, c.wait_s);
+    } else if (c.kind == cavr::machine::MotionKind::ToolOn ||
+               c.kind == cavr::machine::MotionKind::ToolOff) {
+      duration = 0.25;
+    } else if (c.target.pose) {
+      if (previous_pose) {
+        const auto& a = previous_pose->position_m;
+        const auto& b = c.target.pose->position_m;
+        const double dx = a.x_m - b.x_m;
+        const double dy = a.y_m - b.y_m;
+        const double dz = a.z_m - b.z_m;
+        const double distance_m = std::sqrt(dx * dx + dy * dy + dz * dz);
+        const double speed_m_s = c.speed > 10.0 ? c.speed / 1000.0 : c.speed;
+        duration = speed_m_s > 0.001 ? std::max(0.15, distance_m / speed_m_s) : 1.0;
+      } else {
+        duration = 0.8;
+      }
+      previous_pose = *c.target.pose;
+    } else {
+      duration = 1.0;
+    }
     QVariantMap m;
     m["index"] = static_cast<int>(i + 1);
     m["zeroIndex"] = static_cast<int>(i);
@@ -525,12 +552,7 @@ QVariantList RobotController::programSteps() const {
     m["wait"] = c.wait_s;
     m["selected"] = program_.selected_step() == static_cast<int>(i);
     m["active"] = active == static_cast<int>(i);
-    m["duration"] = c.kind == cavr::machine::MotionKind::Wait
-                        ? std::max(0.15, c.wait_s)
-                        : (c.kind == cavr::machine::MotionKind::ToolOn ||
-                           c.kind == cavr::machine::MotionKind::ToolOff)
-                              ? 0.25
-                              : 1.0;
+    m["duration"] = duration;
     out.push_back(m);
   }
   return out;
@@ -542,6 +564,70 @@ void RobotController::selectProgramStep(int index) {
   if (program_.selected_step() == before) return;
   emit programSelectionChanged();
   emit programChanged();
+}
+
+void RobotController::loadDemoWorkpiece() {
+  visual_program_.load_demo_workpiece();
+  emit eventLogged("visual program | loaded demo workpiece and point cloud");
+  emit visualProgramChanged();
+}
+
+void RobotController::selectVisualFeature(int index) {
+  if (!visual_program_.select_feature(index)) return;
+  emit eventLogged(QString("visual program | selected geometry feature %1").arg(index + 1));
+  emit visualProgramChanged();
+}
+
+void RobotController::selectVisualOperation(int index) {
+  if (!visual_program_.select_operation(index)) return;
+  emit eventLogged(QString("visual program | selected operation %1").arg(index + 1));
+  emit visualProgramChanged();
+}
+
+void RobotController::setVisualOperationParams(const QString& type, double speed_mm_s,
+                                               double torch_angle_deg, double standoff_mm,
+                                               double approach_mm, double retract_mm,
+                                               const QString& direction,
+                                               const QString& weld_mode) {
+  visual_program_.set_operation_params(type, speed_mm_s, torch_angle_deg, standoff_mm,
+                                       approach_mm, retract_mm, direction, weld_mode);
+  if (!visual_program_.operations().empty()) {
+    program_.set_task(visual_program_.compiled_task());
+    running_current_program_ = false;
+    emit programSelectionChanged();
+  }
+  emit visualProgramChanged();
+  emit programChanged();
+}
+
+void RobotController::createVisualOperation() {
+  auto result = visual_program_.create_operation_from_selection();
+  if (!result.ok) {
+    emit eventLogged("visual program | " + result.message);
+    emit visualProgramChanged();
+    return;
+  }
+
+  program_.set_task(std::move(result.commands));
+  running_current_program_ = false;
+  emit eventLogged("visual program | created operation: " + result.message);
+  emit visualProgramChanged();
+  emit programSelectionChanged();
+  emit programChanged();
+}
+
+void RobotController::clearVisualOperations() {
+  visual_program_.clear_operations();
+  program_.clear();
+  running_current_program_ = false;
+  emit eventLogged("visual program | cleared operations and compiled timeline");
+  emit visualProgramChanged();
+  emit programSelectionChanged();
+  emit programChanged();
+}
+
+void RobotController::runVisualSimulation() {
+  runProgram();
 }
 
 QVariantList RobotController::savedPrograms() const {
