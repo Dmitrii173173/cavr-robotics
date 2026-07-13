@@ -118,6 +118,18 @@ class RobotController final : public QObject {
   Q_INVOKABLE QString visionSummary() const;
   Q_INVOKABLE void applySeamCorrection();
 
+  // Replay: load a recorded SessionLog (JSON) and scrub it through the scene. While
+  // replaying, the viewport/overlay/joint table are driven from the file instead of
+  // the live robot; the timeline slider seeks by fraction of the recording.
+  Q_INVOKABLE bool loadReplay(const QString& path);
+  Q_INVOKABLE void replaySeek(double fraction);   // 0..1 of the recording
+  Q_INVOKABLE void replayPlayPause();
+  Q_INVOKABLE void exitReplay();                   // return to the live robot
+  Q_INVOKABLE bool isReplaying() const { return replaying_; }
+  Q_INVOKABLE bool replayPlaying() const { return replay_playing_; }
+  Q_INVOKABLE double replayPositionFraction() const;
+  Q_INVOKABLE QString replayInfo() const;          // "file • frame N/M • t / dur"
+
   // Saved jobs in the DB.
   Q_INVOKABLE QVariantList savedPrograms() const;   // [{id, name, steps}]
   Q_INVOKABLE void saveProgram(const QString& name);
@@ -151,10 +163,15 @@ class RobotController final : public QObject {
   void programChanged();          // the editable step list changed
   void savedProgramsChanged();    // the DB list of saved jobs changed
   void programSelectionChanged();  // selected step in list/timeline changed
+  void replayChanged();            // replay loaded / seeked / play state changed
 
  private:
   void tick();
   void publish();
+  // The frame/profile currently driving the scene: the loaded recording while
+  // replaying, otherwise the live robot.
+  [[nodiscard]] const cavr::adapter_sdk::RobotState& active_frame() const;
+  [[nodiscard]] const cavr::machine::MachineProfile& active_profile() const;
   // (Re)connect a robot: build its adapter (mock served the given profile, or TCP),
   // discover the profile, plan/validate/execute the demo. Shared by construction and
   // loadRobot so the scene mirrors any robot through the one ControllerAdapter seam.
@@ -177,6 +194,13 @@ class RobotController final : public QObject {
   // Synchronized vision source: streams a scan PointCloud on the same tick as the
   // robot during a running session, feeding the vision-guided seam correction.
   cavr::adapters::mock_camera::MockCamera camera_{8, 8, "weld_cam"};
+
+  // Replay state: a loaded recording scrubbed through the scene by wall-clock offset.
+  bool replaying_{false};
+  bool replay_playing_{false};
+  double replay_pos_s_{0.0};
+  QString replay_file_;
+  cavr::runtime::SessionLog replay_log_;
   // Private helper: the seam correction in metres for the current scan + program.
   [[nodiscard]] cavr::core::Vec3 seam_offset_m() const;
   ProgramDocument program_;

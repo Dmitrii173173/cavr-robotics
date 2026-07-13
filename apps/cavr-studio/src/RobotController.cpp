@@ -9,6 +9,7 @@
 #include <cavr/validation/trajectory_validator.hpp>
 
 #include <QDir>
+#include <QFileInfo>
 #include <QStandardPaths>
 #include <QVariantMap>
 
@@ -137,6 +138,19 @@ void RobotController::seed_default_robots() {
 }
 
 void RobotController::tick() {
+  // Replay drives the scene from the loaded recording, not the live robot. When
+  // playing, advance the playhead by one tick and stop at the end.
+  if (replaying_) {
+    if (replay_playing_) {
+      const double dur = cavr::runtime::ReplayCursor(replay_log_).duration_s();
+      replay_pos_s_ += static_cast<double>(kTickNs) * 1e-9;
+      if (replay_pos_s_ >= dur) { replay_pos_s_ = dur; replay_playing_ = false; }
+      publish();
+      emit replayChanged();
+    }
+    return;
+  }
+
   now_ns_ += kTickNs;
   manager_.tick(cavr::core::Timestamp::from_nanoseconds(now_ns_));
 
@@ -158,8 +172,19 @@ void RobotController::tick() {
   publish();
 }
 
+const cavr::adapter_sdk::RobotState& RobotController::active_frame() const {
+  if (replaying_) {
+    if (const auto* f = cavr::runtime::ReplayCursor(replay_log_).frame_at(replay_pos_s_)) return *f;
+  }
+  return manager_.latest();
+}
+
+const cavr::machine::MachineProfile& RobotController::active_profile() const {
+  return replaying_ ? replay_log_.profile : manager_.profile();
+}
+
 void RobotController::publish() {
-  const auto& s = manager_.latest();
+  const auto& s = active_frame();
 
   QVariantList joints;
   for (double q : s.joint_positions) joints.push_back(q * kRadToDeg);
@@ -174,7 +199,7 @@ void RobotController::publish() {
   cavr::core::Pose3D shown = s.tcp_pose;
   if (coord_sys_ == cavr::machine::CoordinateSystem::User) {
     cavr::core::Pose3D user_frame;
-    for (const auto& f : manager_.profile().frames) {
+    for (const auto& f : active_profile().frames) {
       if (f.kind == cavr::machine::FrameKind::User) { user_frame = f.transform; break; }
     }
     shown = cavr::machine::compose(cavr::machine::invert(user_frame), s.tcp_pose);
@@ -188,7 +213,8 @@ void RobotController::publish() {
     coord_system_name_ = name;
   }
 
-  phase_ = QString::fromStdString(cavr::runtime::to_string(manager_.phase()));
+  phase_ = replaying_ ? QStringLiteral("replay")
+                      : QString::fromStdString(cavr::runtime::to_string(manager_.phase()));
   program_state_ = QString::fromStdString(cavr::machine::to_string(s.program_state));
   step_label_ = QString::fromStdString(s.current_step_label);
   speed_fraction_ = s.speed_fraction;
@@ -363,6 +389,79 @@ void RobotController::stop() {
 bool RobotController::saveSession(const QString& path) {
   std::vector<std::string> errors;
   return cavr::runtime::save_session_log(manager_.log(), path.toStdString(), errors);
+}
+
+bool RobotController::loadReplay(const QString& path) {
+  auto result = cavr::runtime::load_session_log(path.toStdString());
+  if (!result.ok() || result.log.frames.empty()) {
+    const QString why = result.errors.empty() ? QStringLiteral("no frames")
+                                              : QString::fromStdString(result.errors.front());
+    emit eventLogged(QString("replay | could not load %1: %2").arg(QFileInfo(path).fileName(), why));
+    return false;
+  }
+  replay_log_ = std::move(result.log);
+  replay_file_ = QFileInfo(path).fileName();
+  replaying_ = true;
+  replay_playing_ = false;
+  replay_pos_s_ = 0.0;
+  emit eventLogged(QString("replay | loaded %1 (%2 frames)")
+                       .arg(replay_file_)
+                       .arg(replay_log_.frames.size()));
+  publish();
+  emit replayChanged();
+  return true;
+}
+
+void RobotController::replaySeek(double fraction) {
+  if (!replaying_) return;
+  const double dur = cavr::runtime::ReplayCursor(replay_log_).duration_s();
+  replay_pos_s_ = std::clamp(fraction, 0.0, 1.0) * dur;
+  replay_playing_ = false;
+  publish();
+  emit replayChanged();
+}
+
+void RobotController::replayPlayPause() {
+  if (!replaying_) return;
+  const double dur = cavr::runtime::ReplayCursor(replay_log_).duration_s();
+  if (replay_pos_s_ >= dur) replay_pos_s_ = 0.0;  // restart from the top if at the end
+  replay_playing_ = !replay_playing_;
+  emit replayChanged();
+}
+
+void RobotController::exitReplay() {
+  if (!replaying_) return;
+  replaying_ = false;
+  replay_playing_ = false;
+  emit eventLogged("replay | returned to live robot");
+  publish();
+  emit replayChanged();
+}
+
+double RobotController::replayPositionFraction() const {
+  if (!replaying_) return 0.0;
+  const double dur = cavr::runtime::ReplayCursor(replay_log_).duration_s();
+  return dur > 0.0 ? std::clamp(replay_pos_s_ / dur, 0.0, 1.0) : 0.0;
+}
+
+QString RobotController::replayInfo() const {
+  if (!replaying_) return "live";
+  const cavr::runtime::ReplayCursor cursor(replay_log_);
+  const double dur = cursor.duration_s();
+  // Which frame the playhead is on (for the read-out).
+  int index = 0;
+  const std::int64_t base = replay_log_.frames.front().timestamp.nanoseconds();
+  const std::int64_t want = base + static_cast<std::int64_t>(replay_pos_s_ * 1e9);
+  for (std::size_t i = 0; i < replay_log_.frames.size(); ++i) {
+    if (replay_log_.frames[i].timestamp.nanoseconds() <= want) index = static_cast<int>(i);
+    else break;
+  }
+  return QString("%1  •  frame %2/%3  •  %4 / %5 s")
+      .arg(replay_file_)
+      .arg(index + 1)
+      .arg(replay_log_.frames.size())
+      .arg(replay_pos_s_, 0, 'f', 2)
+      .arg(dur, 0, 'f', 2);
 }
 
 namespace {
@@ -748,8 +847,8 @@ void RobotController::applySeamCorrection() {
 
 QVariantList RobotController::jointStatus() const {
   QVariantList out;
-  const auto& axes = manager_.profile().axes;
-  const auto& q = manager_.latest().joint_positions;
+  const auto& axes = active_profile().axes;
+  const auto& q = active_frame().joint_positions;
   for (std::size_t i = 0; i < axes.size(); ++i) {
     const double value = (i < q.size() ? q[i] : 0.0) * kRadToDeg;
     const double lower = axes[i].lower_limit * kRadToDeg;

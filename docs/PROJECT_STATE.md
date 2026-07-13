@@ -113,6 +113,11 @@ source-clock mapping, deterministic scheduling).
   Jogging enters a manual hold; Run Demo resumes the cycle. With both directions
   wired, CAVR Studio is a bidirectional twin: it mirrors the robot's motion and
   commands it in the standard robot motion model (frames, tools, mm/s Cartesian).
+- The **Program** panel shows live collision status (self + floor) alongside
+  validation; the **Calibration** panel shows the live vision-guided seam offset
+  with an Apply button; the **Session / Replay** panel loads a recorded
+  `SessionLog` and scrubs it through the scene (open, timeline slider, play/pause,
+  exit) — the same viewport driven from a file instead of the live robot.
 
 ## Build / CI / Releases
 
@@ -180,6 +185,7 @@ detector behind `seam_offset` (today a centroid).
   vendor-SDK `ControllerAdapter`, e.g. `adapters/robodk`, still an empty
   placeholder). `GenericTcpController` is done and validated against a fake
   server; what remains is a real robot/PLC on the other end.
-- Bind the remaining Studio panels (Telemetry, Calibration) to the data model,
-  and surface the vision-guided seam correction in the Scan/Plan UI.
-- Interactive timeline editing + replay scrubbing from a saved `SessionLog`.
+- Bind the remaining Studio panels (Telemetry, Calibration intrinsics/hand-eye)
+  to real data; run the Tsai-Lenz solver from a teach sequence in the UI.
+- Interactive timeline *editing* (the Session/Replay panel already scrubs a saved
+  `SessionLog` through the scene — load, seek, play/pause).
