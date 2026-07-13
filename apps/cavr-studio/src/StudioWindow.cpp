@@ -19,12 +19,14 @@
 #include <QFrame>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QFileDialog>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
+#include <QSlider>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTabWidget>
@@ -86,6 +88,8 @@ StudioWindow::StudioWindow(QWidget* parent) : QMainWindow(parent) {
   connect(controller_, &RobotController::programSelectionChanged, this, [this] { refresh_program(); });
   connect(controller_, &RobotController::savedProgramsChanged, this,
           [this] { refresh_saved_programs(); });
+  // Replay load / seek / play-state changes sync the slider + read-out.
+  connect(controller_, &RobotController::replayChanged, this, [this] { refresh_replay(); });
   // Each telemetry tick refreshes the live IO values, joint limits, pendant and the
   // live vision-guidance read-out.
   connect(controller_, &RobotController::telemetryChanged, this, [this] {
@@ -100,6 +104,7 @@ StudioWindow::StudioWindow(QWidget* parent) : QMainWindow(parent) {
   refresh_joints();
   update_pendant();
   refresh_calibration();
+  refresh_replay();
 }
 
 QWidget* StudioWindow::create_robot_viewport() {
@@ -152,7 +157,7 @@ void StudioWindow::create_docks() {
   auto* robots = make_dock("Robots", make_robots_panel());
   auto* jog = make_dock("Jog + Tools", make_jog_panel());
   auto* program = make_dock("Program", make_program_panel());
-  auto* session = make_dock("Session", make_session_panel());
+  auto* session = make_dock("Session / Replay", make_session_panel());
   auto* channels = make_dock("Channels", make_channels_panel());
   auto* calibration = make_dock("Calibration", make_calibration_panel());
 
@@ -565,15 +570,86 @@ void StudioWindow::update_pendant() {
 
 QWidget* StudioWindow::make_session_panel() {
   auto* panel = new QWidget;
-  auto* layout = new QFormLayout(panel);
-  layout->addRow("File", value_label("weld_scan_2025_05_10.mcap"));
-  layout->addRow("Duration", value_label("00:02:34.893"));
-  layout->addRow("Start Time", value_label("2025-05-10 14:23:11.123"));
-  layout->addRow("End Time", value_label("2025-05-10 14:25:46.016"));
-  layout->addRow("Messages", value_label("1 234 567"));
-  layout->addRow("Size", value_label("2.45 GB"));
-  layout->addRow("Version", value_label("0.1.0"));
+  auto* layout = new QVBoxLayout(panel);
+
+  // Replay: open a recorded session (JSON) and scrub it through the scene. While a
+  // recording is loaded the viewport is driven from the file; Exit returns to live.
+  auto* title = new QLabel("Session replay");
+  title->setStyleSheet("font-weight:bold;");
+  layout->addWidget(title);
+
+  auto* open_row = new QHBoxLayout;
+  // Use Qt's own (non-native) file dialog: the native macOS panel can open behind
+  // an always-on-top overlay window and appear to do nothing.
+  auto* open = new QPushButton("Open recording…");
+  connect(open, &QPushButton::clicked, this, [this] {
+    const QString path = QFileDialog::getOpenFileName(this, "Open recorded session", QString(),
+                                                      "CAVR session (*.json);;All files (*)", nullptr,
+                                                      QFileDialog::DontUseNativeDialog);
+    if (!path.isEmpty()) {
+      controller_->loadReplay(path);
+      refresh_replay();
+    }
+  });
+  open_row->addWidget(open);
+  auto* save = new QPushButton("Save current…");
+  connect(save, &QPushButton::clicked, this, [this] {
+    const QString path = QFileDialog::getSaveFileName(this, "Save session", "session.json",
+                                                      "CAVR session (*.json)", nullptr,
+                                                      QFileDialog::DontUseNativeDialog);
+    if (!path.isEmpty()) controller_->saveSession(path);
+  });
+  open_row->addWidget(save);
+  layout->addLayout(open_row);
+
+  replay_label_ = new QLabel("live — open a recording to replay");
+  replay_label_->setObjectName("replayInfo");
+  replay_label_->setWordWrap(true);
+  layout->addWidget(replay_label_);
+
+  // Scrub slider (0..1000 → fraction of the recording).
+  replay_slider_ = new QSlider(Qt::Horizontal);
+  replay_slider_->setRange(0, 1000);
+  replay_slider_->setEnabled(false);
+  connect(replay_slider_, &QSlider::sliderMoved, this, [this](int v) {
+    controller_->replaySeek(static_cast<double>(v) / 1000.0);
+  });
+  layout->addWidget(replay_slider_);
+
+  auto* controls = new QHBoxLayout;
+  replay_play_ = new QPushButton("Play");
+  replay_play_->setEnabled(false);
+  connect(replay_play_, &QPushButton::clicked, this, [this] {
+    controller_->replayPlayPause();
+    refresh_replay();
+  });
+  controls->addWidget(replay_play_);
+  auto* exit = new QPushButton("Exit replay");
+  connect(exit, &QPushButton::clicked, this, [this] {
+    controller_->exitReplay();
+    refresh_replay();
+  });
+  controls->addWidget(exit);
+  layout->addLayout(controls);
+
+  layout->addStretch();
   return panel;
+}
+
+void StudioWindow::refresh_replay() {
+  if (!controller_ || !replay_slider_) return;
+  const bool replaying = controller_->isReplaying();
+  replay_slider_->setEnabled(replaying);
+  replay_play_->setEnabled(replaying);
+  replay_play_->setText(controller_->replayPlaying() ? "Pause" : "Play");
+  replay_label_->setText(controller_->replayInfo());
+  replay_label_->setStyleSheet(replaying ? "color:#7fd0ff;" : "color:#8b96a0;");
+  // Reflect the playhead without fighting a drag in progress.
+  if (replaying && !replay_slider_->isSliderDown()) {
+    const int pos = static_cast<int>(controller_->replayPositionFraction() * 1000.0);
+    QSignalBlocker block(replay_slider_);
+    replay_slider_->setValue(pos);
+  }
 }
 
 QWidget* StudioWindow::make_channels_panel() {

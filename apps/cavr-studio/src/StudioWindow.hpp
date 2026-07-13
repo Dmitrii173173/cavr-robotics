@@ -9,6 +9,8 @@ class QListWidget;
 class QLineEdit;
 class QComboBox;
 class QTableWidget;
+class QSlider;
+class QPushButton;
 class RobotController;
 
 class StudioWindow final : public QMainWindow {
@@ -41,6 +43,9 @@ class StudioWindow final : public QMainWindow {
   QLabel* validation_label_{nullptr};     // pre-flight validation summary
   QLabel* collision_label_{nullptr};      // collision status (self + floor)
   QLabel* vision_label_{nullptr};         // live vision-guided seam correction read-out
+  QSlider* replay_slider_{nullptr};       // scrub position through a loaded recording
+  QLabel* replay_label_{nullptr};         // replay read-out (file / frame / time)
+  QPushButton* replay_play_{nullptr};     // play / pause the replay
   void refresh_robots();
   void refresh_io();       // live IO values + writable-channel list, on each telemetry tick
   void refresh_program();  // editable step list
@@ -48,6 +53,7 @@ class StudioWindow final : public QMainWindow {
   void refresh_joints();   // per-axis position vs joint limits, on each telemetry tick
   void update_pendant();   // refresh the pendant LCD read-out on each telemetry tick
   void refresh_calibration();  // live vision-guidance read-out, on each telemetry tick
+  void refresh_replay();       // sync the replay slider/label with the controller state
 
   [[nodiscard]] QDockWidget* make_dock(const QString& title, QWidget* widget);
   [[nodiscard]] QWidget* make_robots_panel();
