@@ -579,10 +579,13 @@ QWidget* StudioWindow::make_session_panel() {
   layout->addWidget(title);
 
   auto* open_row = new QHBoxLayout;
+  // Use Qt's own (non-native) file dialog: the native macOS panel can open behind
+  // an always-on-top overlay window and appear to do nothing.
   auto* open = new QPushButton("Open recording…");
   connect(open, &QPushButton::clicked, this, [this] {
     const QString path = QFileDialog::getOpenFileName(this, "Open recorded session", QString(),
-                                                      "CAVR session (*.json);;All files (*)");
+                                                      "CAVR session (*.json);;All files (*)", nullptr,
+                                                      QFileDialog::DontUseNativeDialog);
     if (!path.isEmpty()) {
       controller_->loadReplay(path);
       refresh_replay();
@@ -592,7 +595,8 @@ QWidget* StudioWindow::make_session_panel() {
   auto* save = new QPushButton("Save current…");
   connect(save, &QPushButton::clicked, this, [this] {
     const QString path = QFileDialog::getSaveFileName(this, "Save session", "session.json",
-                                                      "CAVR session (*.json)");
+                                                      "CAVR session (*.json)", nullptr,
+                                                      QFileDialog::DontUseNativeDialog);
     if (!path.isEmpty()) controller_->saveSession(path);
   });
   open_row->addWidget(save);
