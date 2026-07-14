@@ -43,6 +43,9 @@ class StudioWindow final : public QMainWindow {
   QLabel* validation_label_{nullptr};     // pre-flight validation summary
   QLabel* collision_label_{nullptr};      // collision status (self + floor)
   QLabel* vision_label_{nullptr};         // live vision-guided seam correction read-out
+  QLabel* calib_intrinsics_label_{nullptr};  // live camera intrinsics
+  QLabel* calib_handeye_label_{nullptr};     // solved hand-eye transform + residual
+  QLabel* calib_status_label_{nullptr};      // calibration sample/solve status
   QSlider* replay_slider_{nullptr};       // scrub position through a loaded recording
   QLabel* replay_label_{nullptr};         // replay read-out (file / frame / time)
   QPushButton* replay_play_{nullptr};     // play / pause the replay

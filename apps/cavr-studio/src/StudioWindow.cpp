@@ -90,6 +90,8 @@ StudioWindow::StudioWindow(QWidget* parent) : QMainWindow(parent) {
           [this] { refresh_saved_programs(); });
   // Replay load / seek / play-state changes sync the slider + read-out.
   connect(controller_, &RobotController::replayChanged, this, [this] { refresh_replay(); });
+  // Calibration capture / solve / clear refreshes the intrinsics + hand-eye read-out.
+  connect(controller_, &RobotController::calibrationChanged, this, [this] { refresh_calibration(); });
   // Each telemetry tick refreshes the live IO values, joint limits, pendant and the
   // live vision-guidance read-out.
   connect(controller_, &RobotController::telemetryChanged, this, [this] {
@@ -701,12 +703,49 @@ QWidget* StudioWindow::make_calibration_panel() {
   auto* panel = new QWidget;
   auto* layout = new QVBoxLayout(panel);
 
+  // Live intrinsics + hand-eye read-out (was static placeholder text).
   auto* form = new QFormLayout;
-  form->addRow("Camera Intrinsics", value_label("cam_01_intrinsics.yaml"));
-  form->addRow("Hand-Eye", value_label("he_2025_05_10.yaml"));
-  form->addRow("Reprojection Error", value_label("0.42 px"));
-  form->addRow("Status", value_label("Valid"));
+  calib_intrinsics_label_ = value_label("");
+  calib_handeye_label_ = value_label("");
+  calib_status_label_ = value_label("");
+  form->addRow("Camera Intrinsics", calib_intrinsics_label_);
+  form->addRow("Hand-Eye", calib_handeye_label_);
+  form->addRow("Status", calib_status_label_);
   layout->addLayout(form);
+
+  // Hand-eye teach + solve: jog to a few varied poses, Capture each, then Solve
+  // (Tsai-Lenz). Save writes intrinsics + hand-eye JSON.
+  auto* cal_buttons = new QHBoxLayout;
+  auto* capture = new QPushButton("Capture pose");
+  connect(capture, &QPushButton::clicked, this, [this] {
+    controller_->captureCalibrationSample();
+    refresh_calibration();
+  });
+  cal_buttons->addWidget(capture);
+  auto* solve = new QPushButton("Solve hand-eye");
+  connect(solve, &QPushButton::clicked, this, [this] {
+    controller_->solveHandEye();
+    refresh_calibration();
+  });
+  cal_buttons->addWidget(solve);
+  layout->addLayout(cal_buttons);
+
+  auto* cal_buttons2 = new QHBoxLayout;
+  auto* clear = new QPushButton("Clear");
+  connect(clear, &QPushButton::clicked, this, [this] {
+    controller_->clearCalibrationSamples();
+    refresh_calibration();
+  });
+  cal_buttons2->addWidget(clear);
+  auto* save = new QPushButton("Save calibration…");
+  connect(save, &QPushButton::clicked, this, [this] {
+    const QString path = QFileDialog::getSaveFileName(this, "Save calibration", "calibration.json",
+                                                      "CAVR calibration (*.json)", nullptr,
+                                                      QFileDialog::DontUseNativeDialog);
+    if (!path.isEmpty()) controller_->saveCalibration(path);
+  });
+  cal_buttons2->addWidget(save);
+  layout->addLayout(cal_buttons2);
 
   layout->addWidget(horizontal_rule());
 
@@ -734,9 +773,19 @@ QWidget* StudioWindow::make_calibration_panel() {
 }
 
 void StudioWindow::refresh_calibration() {
-  if (!controller_ || !vision_label_) return;
-  vision_label_->setText(controller_->visionSummary());
-  vision_label_->setStyleSheet(controller_->hasScan() ? "color:#7fd0ff;" : "color:#8b96a0;");
+  if (!controller_) return;
+  if (calib_intrinsics_label_) calib_intrinsics_label_->setText(controller_->intrinsicsSummary());
+  if (calib_handeye_label_) {
+    calib_handeye_label_->setText(controller_->handEyeSummary());
+    const bool solved = controller_->calibrationSampleCount() > 0 &&
+                        !controller_->handEyeSummary().startsWith("not");
+    calib_handeye_label_->setStyleSheet(solved ? "color:#46f0a0;" : "color:#8b96a0;");
+  }
+  if (calib_status_label_) calib_status_label_->setText(controller_->calibrationStatus());
+  if (vision_label_) {
+    vision_label_->setText(controller_->visionSummary());
+    vision_label_->setStyleSheet(controller_->hasScan() ? "color:#7fd0ff;" : "color:#8b96a0;");
+  }
 }
 
 QWidget* StudioWindow::make_jog_panel() {
