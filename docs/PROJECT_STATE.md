@@ -114,10 +114,13 @@ source-clock mapping, deterministic scheduling).
   wired, CAVR Studio is a bidirectional twin: it mirrors the robot's motion and
   commands it in the standard robot motion model (frames, tools, mm/s Cartesian).
 - The **Program** panel shows live collision status (self + floor) alongside
-  validation; the **Calibration** panel shows the live vision-guided seam offset
-  with an Apply button; the **Session / Replay** panel loads a recorded
-  `SessionLog` and scrubs it through the scene (open, timeline slider, play/pause,
-  exit) — the same viewport driven from a file instead of the live robot.
+  validation; the **Calibration** panel shows live camera intrinsics, runs a
+  **hand-eye teach + Tsai-Lenz solve** (Capture poses → Solve → save intrinsics +
+  hand-eye JSON, with the recovered transform and RMS residual shown), and the
+  live vision-guided seam offset with an Apply button; the **Session / Replay**
+  panel loads a recorded `SessionLog` and scrubs it through the scene (open,
+  timeline slider, play/pause, exit) — the same viewport driven from a file
+  instead of the live robot.
 
 ## Build / CI / Releases
 
@@ -185,7 +188,7 @@ detector behind `seam_offset` (today a centroid).
   vendor-SDK `ControllerAdapter`, e.g. `adapters/robodk`, still an empty
   placeholder). `GenericTcpController` is done and validated against a fake
   server; what remains is a real robot/PLC on the other end.
-- Bind the remaining Studio panels (Telemetry, Calibration intrinsics/hand-eye)
-  to real data; run the Tsai-Lenz solver from a teach sequence in the UI.
+- Bind the remaining Studio panel (Telemetry) to real data; camera-intrinsics
+  *fitting* (checkerboard) to refine the representative intrinsics the UI shows.
 - Interactive timeline *editing* (the Session/Replay panel already scrubs a saved
   `SessionLog` through the scene — load, seek, play/pause).

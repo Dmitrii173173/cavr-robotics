@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -462,6 +463,108 @@ QString RobotController::replayInfo() const {
       .arg(replay_log_.frames.size())
       .arg(replay_pos_s_, 0, 'f', 2)
       .arg(dur, 0, 'f', 2);
+}
+
+// ------------------------------------------------------------ calibration
+
+void RobotController::captureCalibrationSample() {
+  const auto& profile = active_profile();
+  // The "true" hand-eye (camera-in-flange) we recover: the profile's camera
+  // extrinsics. A fixed calibration target sits on the table in the base frame.
+  const cavr::core::Pose3D true_he =
+      profile.cameras.empty() ? cavr::core::Pose3D{} : profile.cameras.front().extrinsics;
+  const cavr::core::Pose3D target_in_base{cavr::core::Vec3{0.6, 0.4, 0.0},
+                                          cavr::core::Quaternion::identity()};
+
+  const auto fk = cavr::machine::forward_kinematics(profile.axes, active_frame().joint_positions,
+                                                    cavr::core::Pose3D{});
+  const cavr::core::Pose3D flange = fk.tcp;  // identity tool → flange frame
+  const cavr::core::Pose3D camera_in_base = cavr::machine::compose(flange, true_he);
+
+  cavr::calibration::HandEyeSample sample;
+  sample.flange_in_base = flange;
+  // What the camera detector would report: the target expressed in the camera frame.
+  sample.target_in_camera =
+      cavr::machine::compose(cavr::machine::invert(camera_in_base),
+                             cavr::core::Pose3D{target_in_base.position_m, target_in_base.orientation});
+  he_samples_.push_back(sample);
+  he_solved_ = false;
+  emit eventLogged(QString("calibration | captured pose %1 (jog to vary, need ≥3)")
+                       .arg(he_samples_.size()));
+  emit calibrationChanged();
+}
+
+void RobotController::solveHandEye() {
+  if (he_samples_.size() < 3) {
+    emit eventLogged("calibration | need at least 3 varied poses before solving");
+    return;
+  }
+  const std::string cam =
+      active_profile().cameras.empty() ? std::string("camera") : active_profile().cameras.front().name;
+  const auto result = cavr::calibration::solve_hand_eye(he_samples_,
+                                                        cavr::calibration::HandEyeType::EyeInHand, cam);
+  if (!result.ok) {
+    he_solved_ = false;
+    emit eventLogged(QString("calibration | solve failed: %1 — jog to more varied orientations")
+                         .arg(QString::fromStdString(result.error)));
+  } else {
+    solved_he_ = result.calibration;
+    he_solved_ = true;
+    emit eventLogged(QString("calibration | solved from %1 poses — residual %2 mm / %3°")
+                         .arg(result.pairs_used + 1)
+                         .arg(solved_he_.residual_position_m * 1000.0, 0, 'f', 2)
+                         .arg(solved_he_.residual_rotation_rad * 180.0 / 3.14159265358979323846, 0, 'f', 2));
+  }
+  emit calibrationChanged();
+}
+
+void RobotController::clearCalibrationSamples() {
+  he_samples_.clear();
+  he_solved_ = false;
+  emit eventLogged("calibration | cleared samples");
+  emit calibrationChanged();
+}
+
+QString RobotController::intrinsicsSummary() const {
+  return QString("fx %1  fy %2  ·  cx %3  cy %4  ·  %5×%6")
+      .arg(intrinsics_.fx, 0, 'f', 0)
+      .arg(intrinsics_.fy, 0, 'f', 0)
+      .arg(intrinsics_.cx, 0, 'f', 0)
+      .arg(intrinsics_.cy, 0, 'f', 0)
+      .arg(intrinsics_.width)
+      .arg(intrinsics_.height);
+}
+
+QString RobotController::handEyeSummary() const {
+  if (!he_solved_) return "not calibrated";
+  const auto& t = solved_he_.transform.position_m;
+  return QString("t (%1, %2, %3) mm  ·  residual %4 mm / %5°")
+      .arg(t.x_m * 1000.0, 0, 'f', 1)
+      .arg(t.y_m * 1000.0, 0, 'f', 1)
+      .arg(t.z_m * 1000.0, 0, 'f', 1)
+      .arg(solved_he_.residual_position_m * 1000.0, 0, 'f', 2)
+      .arg(solved_he_.residual_rotation_rad * 180.0 / 3.14159265358979323846, 0, 'f', 2);
+}
+
+QString RobotController::calibrationStatus() const {
+  if (he_solved_) return QString("calibrated (%1 poses)").arg(he_samples_.size());
+  return QString("%1 pose%2 captured — need ≥3, then Solve")
+      .arg(he_samples_.size())
+      .arg(he_samples_.size() == 1 ? "" : "s");
+}
+
+bool RobotController::saveCalibration(const QString& path) {
+  cavr::json::Value root;
+  root.set("intrinsics", cavr::calibration::to_json(intrinsics_));
+  if (he_solved_) root.set("hand_eye", cavr::calibration::to_json(solved_he_));
+  std::ofstream out(path.toStdString());
+  if (!out) {
+    emit eventLogged(QString("calibration | could not write %1").arg(QFileInfo(path).fileName()));
+    return false;
+  }
+  out << root.dump(2) << '\n';
+  emit eventLogged(QString("calibration | saved %1").arg(QFileInfo(path).fileName()));
+  return true;
 }
 
 namespace {

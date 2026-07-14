@@ -18,6 +18,9 @@
 #include <cavr/adapters/generic_tcp_robot/generic_tcp_controller.hpp>
 #include <cavr/adapters/mock_camera/mock_camera.hpp>
 #include <cavr/adapters/mock_robot/mock_controller.hpp>
+#include <cavr/calibration/calibration_io.hpp>
+#include <cavr/calibration/camera_intrinsics.hpp>
+#include <cavr/calibration/hand_eye_solver.hpp>
 #include <cavr/catalog/sqlite_profile_store.hpp>
 #include <cavr/catalog/sqlite_program_store.hpp>
 #include <cavr/core/geometry.hpp>
@@ -25,6 +28,8 @@
 #include <cavr/machine/motion.hpp>
 #include <cavr/runtime/session_manager.hpp>
 #include <cavr/runtime/vision_guidance.hpp>
+
+#include <vector>
 
 #include <cstdint>
 #include <memory>
@@ -130,6 +135,20 @@ class RobotController final : public QObject {
   Q_INVOKABLE double replayPositionFraction() const;
   Q_INVOKABLE QString replayInfo() const;          // "file • frame N/M • t / dur"
 
+  // Hand-eye calibration: teach the robot at several poses (Capture), then solve the
+  // camera↔flange transform with Tsai-Lenz. In simulation the camera's target
+  // observation is synthesized from a fixed cell target and the profile's true
+  // extrinsics — exactly what a real target detector would report — so the solver
+  // recovers a genuine result. Save writes intrinsics + hand-eye as JSON.
+  Q_INVOKABLE void captureCalibrationSample();
+  Q_INVOKABLE void solveHandEye();
+  Q_INVOKABLE void clearCalibrationSamples();
+  Q_INVOKABLE int calibrationSampleCount() const { return static_cast<int>(he_samples_.size()); }
+  Q_INVOKABLE QString intrinsicsSummary() const;
+  Q_INVOKABLE QString handEyeSummary() const;
+  Q_INVOKABLE QString calibrationStatus() const;
+  Q_INVOKABLE bool saveCalibration(const QString& path);
+
   // Saved jobs in the DB.
   Q_INVOKABLE QVariantList savedPrograms() const;   // [{id, name, steps}]
   Q_INVOKABLE void saveProgram(const QString& name);
@@ -164,6 +183,7 @@ class RobotController final : public QObject {
   void savedProgramsChanged();    // the DB list of saved jobs changed
   void programSelectionChanged();  // selected step in list/timeline changed
   void replayChanged();            // replay loaded / seeked / play state changed
+  void calibrationChanged();       // hand-eye samples captured / solved / cleared
 
  private:
   void tick();
@@ -201,6 +221,15 @@ class RobotController final : public QObject {
   double replay_pos_s_{0.0};
   QString replay_file_;
   cavr::runtime::SessionLog replay_log_;
+
+  // Hand-eye calibration state.
+  std::vector<cavr::calibration::HandEyeSample> he_samples_;
+  cavr::calibration::HandEyeCalibration solved_he_;
+  bool he_solved_{false};
+  // Representative wrist-camera intrinsics (the model the pipeline projects through;
+  // a checkerboard fit would refine these).
+  cavr::calibration::CameraIntrinsics intrinsics_{640, 480, 600.0, 600.0, 320.0, 240.0,
+                                                  -0.28, 0.10, 0.0, 0.001, -0.0005};
   // Private helper: the seam correction in metres for the current scan + program.
   [[nodiscard]] cavr::core::Vec3 seam_offset_m() const;
   ProgramDocument program_;
