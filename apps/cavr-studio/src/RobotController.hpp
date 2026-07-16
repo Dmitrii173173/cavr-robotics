@@ -112,6 +112,15 @@ class RobotController final : public QObject {
   // Collision status of the current program against the active robot: self-collision
   // and floor penetration over the sampled trajectory (see libs/validation).
   Q_INVOKABLE QString collisionSummary() const;
+  // Estimated cycle time of the current program, from the SAME libs/motion planner
+  // the controller executes — so the number shown is the time that will actually run,
+  // under the currently selected velocity profile. "~2.34 s (trapezoidal)".
+  Q_INVOKABLE QString cycleSummary() const;
+  // Velocity-profile shape used for planning and execution: 0 trapezoidal
+  // (bounded acceleration), 1 S-curve (bounded jerk — gentler, slightly slower).
+  // Retunes the underlying VirtualRobot so subsequent moves ramp accordingly.
+  Q_INVOKABLE void setMotionProfile(int mode);
+  Q_INVOKABLE int motionProfile() const { return motion_profile_mode_; }
 
   // Vision guidance: the live scan (a synchronized PointCloud from the camera) is
   // placed in the base frame via the profile's hand-eye extrinsics and compared to
@@ -210,6 +219,10 @@ class RobotController final : public QObject {
   bool manual_{false};  // set by jogging; suppresses the demo auto-restart
   cavr::machine::CoordinateSystem coord_sys_{cavr::machine::CoordinateSystem::Base};
   double speed_mm_s_{50.0};  // Cartesian jog speed
+  // Velocity-profile shape driving both the cycle-time estimate and the mock's
+  // executor. 0 = trapezoidal, 1 = S-curve; limits_ is the corresponding tuning.
+  int motion_profile_mode_{0};
+  cavr::motion::MotionLimits motion_limits_{cavr::motion::MotionLimits::trapezoidal()};
   cavr::runtime::SessionManager manager_;
   // Synchronized vision source: streams a scan PointCloud on the same tick as the
   // robot during a running session, feeding the vision-guided seam correction.

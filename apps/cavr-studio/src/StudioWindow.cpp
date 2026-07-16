@@ -386,6 +386,24 @@ QWidget* StudioWindow::make_program_panel() {
   collision_label_->setObjectName("collisionSummary");
   layout->addWidget(collision_label_);
 
+  // Velocity profile + estimated cycle time. The profile shapes accel/decel (and
+  // corner blending) for both the estimate and the mock's executor; the cycle time
+  // comes from the same libs/motion planner that runs the move, so it is honest.
+  auto* motion_row = new QHBoxLayout;
+  motion_row->addWidget(new QLabel("Profile"));
+  motion_profile_ = new QComboBox;
+  motion_profile_->addItem("Trapezoidal");
+  motion_profile_->addItem("S-curve");
+  motion_profile_->setCurrentIndex(controller_->motionProfile());
+  connect(motion_profile_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+          [this](int index) { controller_->setMotionProfile(index); });
+  motion_row->addWidget(motion_profile_, 1);
+  layout->addLayout(motion_row);
+
+  cycle_label_ = new QLabel;
+  cycle_label_->setObjectName("cycleSummary");
+  layout->addWidget(cycle_label_);
+
   // Add-step buttons: teach motion from the current pose/joints, or insert
   // Wait/Tool steps. MoveC needs a via first (Set via), then Add MoveC.
   auto* add_grid = new QGridLayout;
@@ -520,6 +538,10 @@ void StudioWindow::refresh_program() {
     collision_label_->setText("Collisions: " + summary);
     const bool clean = summary.contains("no collision") || summary.contains("no steps");
     collision_label_->setStyleSheet(clean ? "color:#46f0a0;" : "color:#ff6b6b; font-weight:bold;");
+  }
+  if (cycle_label_) {
+    cycle_label_->setText("Cycle: " + controller_->cycleSummary());
+    cycle_label_->setStyleSheet("color:#9fb3c8;");
   }
 }
 
