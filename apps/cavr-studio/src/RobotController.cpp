@@ -874,6 +874,37 @@ QString RobotController::collisionSummary() const {
   return QString("✗ %1 collision%2").arg(collisions).arg(collisions == 1 ? "" : "s");
 }
 
+QString RobotController::cycleSummary() const {
+  const cavr::machine::MotionTask& task = program_.task();
+  const char* mode = motion_profile_mode_ == 1 ? "S-curve" : "trapezoidal";
+  if (task.empty()) return QString("— (%1)").arg(mode);
+  const cavr::machine::MachineProfile& profile = manager_.profile();
+  const cavr::core::Pose3D tool =
+      controller_ && controller_->tools() ? controller_->tools()->current_offset() : cavr::core::Pose3D{};
+  // Plan through the same libs/motion planner the executor uses, with the selected
+  // velocity profile, so the figure is the wall-clock time the program will take.
+  const cavr::motion::TaskPlan plan = cavr::motion::plan_task(
+      profile.axes, tool, task, std::vector<double>(profile.dof(), 0.0), motion_limits_);
+  return QString("~%1 s (%2)").arg(plan.cycle_time_s(), 0, 'f', 2).arg(mode);
+}
+
+void RobotController::setMotionProfile(int mode) {
+  const int clamped = mode == 1 ? 1 : 0;
+  if (clamped == motion_profile_mode_) return;
+  motion_profile_mode_ = clamped;
+  motion_limits_ = clamped == 1 ? cavr::motion::MotionLimits::s_curve()
+                                : cavr::motion::MotionLimits::trapezoidal();
+  // Retune the virtual robot so subsequent moves (and re-runs) execute under the new
+  // profile. Only the in-process mock exposes the executor; a remote controller runs
+  // its own profile, so we only update the cycle-time estimate there.
+  if (auto* mock = dynamic_cast<cavr::adapters::mock_robot::MockController*>(controller_.get())) {
+    mock->virtual_robot().set_limits(motion_limits_);
+  }
+  emit eventLogged(QString("motion | velocity profile → %1")
+                       .arg(clamped == 1 ? "S-curve (jerk-limited)" : "trapezoidal"));
+  emit programChanged();  // refresh the cycle-time read-out
+}
+
 bool RobotController::hasScan() const { return manager_.has_point_cloud(); }
 
 int RobotController::scanPointCount() const {

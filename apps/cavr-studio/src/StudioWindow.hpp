@@ -42,6 +42,8 @@ class StudioWindow final : public QMainWindow {
   QLineEdit* program_name_{nullptr};      // name field for saving a job
   QLabel* validation_label_{nullptr};     // pre-flight validation summary
   QLabel* collision_label_{nullptr};      // collision status (self + floor)
+  QLabel* cycle_label_{nullptr};          // estimated cycle time under the chosen profile
+  QComboBox* motion_profile_{nullptr};    // trapezoidal / S-curve velocity profile
   QLabel* vision_label_{nullptr};         // live vision-guided seam correction read-out
   QLabel* calib_intrinsics_label_{nullptr};  // live camera intrinsics
   QLabel* calib_handeye_label_{nullptr};     // solved hand-eye transform + residual
