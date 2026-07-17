@@ -99,6 +99,7 @@ StudioWindow::StudioWindow(QWidget* parent) : QMainWindow(parent) {
     refresh_joints();
     update_pendant();
     refresh_calibration();
+    refresh_faults();
   });
   refresh_robots();
   refresh_program();
@@ -1068,17 +1069,60 @@ QWidget* StudioWindow::make_jog_panel() {
 QWidget* StudioWindow::make_fault_panel() {
   auto* panel = new QWidget;
   auto* layout = new QVBoxLayout(panel);
-  auto* form = new QFormLayout;
-  form->addRow("Profile", value_label("latency_100ms_drop2"));
-  form->addRow("Camera Delay", value_label("100 ms"));
-  form->addRow("Drop Rate", value_label("2.0%"));
-  form->addRow("Pose Noise (pos)", value_label("0.0 mm"));
-  form->addRow("Pose Noise (rot)", value_label("0.0 deg"));
-  layout->addLayout(form);
+
+  // Live alarm read-out, refreshed each telemetry tick.
+  fault_status_label_ = new QLabel;
+  fault_status_label_->setObjectName("faultStatus");
+  layout->addWidget(fault_status_label_);
   layout->addWidget(horizontal_rule());
-  layout->addWidget(new QPushButton("Configure"));
+
+  // Inject a fault on the virtual robot to rehearse the cell's reaction. The mock
+  // executes these deterministically; the same faults would arrive as alarms from a
+  // real controller. (No effect on a remote controller — it runs its own faults.)
+  layout->addWidget(new QLabel("Inject fault"));
+  auto* estop = new QPushButton("⛔ Emergency stop");
+  connect(estop, &QPushButton::clicked, this, [this] { controller_->injectEstop(); });
+  layout->addWidget(estop);
+
+  auto* servo = new QPushButton("Servo overload");
+  connect(servo, &QPushButton::clicked, this, [this] { controller_->injectServoFault(); });
+  layout->addWidget(servo);
+
+  auto* arc = new QPushButton("Weld arc loss");
+  connect(arc, &QPushButton::clicked, this, [this] { controller_->injectArcLoss(); });
+  layout->addWidget(arc);
+
+  // Continuous encoder jitter on the reported joints.
+  auto* noise_row = new QHBoxLayout;
+  noise_row->addWidget(new QLabel("Encoder noise"));
+  auto* noise_spin = new QDoubleSpinBox;
+  noise_spin->setRange(0.0, 2.0);
+  noise_spin->setDecimals(2);
+  noise_spin->setSingleStep(0.05);
+  noise_spin->setSuffix("° σ");
+  connect(noise_spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+          [this](double v) { controller_->setEncoderNoise(v); });
+  noise_row->addWidget(noise_spin, 1);
+  layout->addLayout(noise_row);
+
+  layout->addWidget(horizontal_rule());
+  auto* reset = new QPushButton("Reset / acknowledge alarm");
+  connect(reset, &QPushButton::clicked, this, [this] { controller_->resetFault(); });
+  layout->addWidget(reset);
+
   layout->addStretch();
+  refresh_faults();
   return panel;
+}
+
+void StudioWindow::refresh_faults() {
+  if (!fault_status_label_ || !controller_) return;
+  const QString status = controller_->faultStatus();
+  const bool faulted = status.startsWith("⛔");
+  QString text = "Status: " + status;
+  if (!controller_->faultSupported()) text += "  (remote — read-only)";
+  fault_status_label_->setText(text);
+  fault_status_label_->setStyleSheet(faulted ? "color:#ff6b6b; font-weight:bold;" : "color:#46f0a0;");
 }
 
 void StudioWindow::apply_theme() {

@@ -44,6 +44,7 @@ class StudioWindow final : public QMainWindow {
   QLabel* collision_label_{nullptr};      // collision status (self + floor)
   QLabel* cycle_label_{nullptr};          // estimated cycle time under the chosen profile
   QComboBox* motion_profile_{nullptr};    // trapezoidal / S-curve velocity profile
+  QLabel* fault_status_label_{nullptr};   // live fault / alarm read-out
   QLabel* vision_label_{nullptr};         // live vision-guided seam correction read-out
   QLabel* calib_intrinsics_label_{nullptr};  // live camera intrinsics
   QLabel* calib_handeye_label_{nullptr};     // solved hand-eye transform + residual
@@ -59,6 +60,7 @@ class StudioWindow final : public QMainWindow {
   void update_pendant();   // refresh the pendant LCD read-out on each telemetry tick
   void refresh_calibration();  // live vision-guidance read-out, on each telemetry tick
   void refresh_replay();       // sync the replay slider/label with the controller state
+  void refresh_faults();       // live fault/alarm read-out, on each telemetry tick
 
   [[nodiscard]] QDockWidget* make_dock(const QString& title, QWidget* widget);
   [[nodiscard]] QWidget* make_robots_panel();

@@ -12,5 +12,6 @@ target_link_libraries(cavr_sim
     CAVR::time
     CAVR::machine
     CAVR::motion
+    CAVR::fault_injection
     CAVR::adapter_sdk
 )

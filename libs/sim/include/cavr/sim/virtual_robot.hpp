@@ -16,6 +16,7 @@
 
 #include <cavr/adapter_sdk/robot_state.hpp>
 #include <cavr/core/time.hpp>
+#include <cavr/fault_injection/fault_model.hpp>
 #include <cavr/machine/frames.hpp>
 #include <cavr/machine/kinematics.hpp>
 #include <cavr/machine/machine_profile.hpp>
@@ -34,6 +35,7 @@ namespace cavr::sim {
 
 namespace machine = cavr::machine;
 namespace motion = cavr::motion;
+namespace fault = cavr::fault_injection;
 namespace sdk = cavr::adapter_sdk;
 
 class VirtualRobot final {
@@ -54,6 +56,23 @@ class VirtualRobot final {
   [[nodiscard]] machine::ProgramState state() const noexcept { return state_; }
   [[nodiscard]] const motion::MotionLimits& limits() const noexcept { return limits_; }
   void set_limits(motion::MotionLimits limits) noexcept { limits_ = limits; }
+
+  // The fault scenario driving this robot. Faults are re-armed on each start(), so
+  // configuring the injector between runs replays deterministically.
+  [[nodiscard]] fault::FaultInjector& faults() noexcept { return faults_; }
+  [[nodiscard]] const fault::FaultInjector& faults() const noexcept { return faults_; }
+  [[nodiscard]] bool faulted() const noexcept { return faulted_; }
+
+  // Clear a latched fault (E-stop / servo / arc loss) and re-arm the scenario — the
+  // operator's "reset" after acknowledging an alarm. Does not remove the specs.
+  void clear_fault() {
+    faulted_ = false;
+    arc_fault_ = false;
+    fault_severity_ = machine::Severity::Info;
+    fault_code_ = 0;
+    fault_message_.clear();
+    faults_.arm();
+  }
 
   // Servo power: the adapter energises the robot on connect and de-energises on
   // disconnect. Off is reported as ServoState::Off in telemetry.
@@ -121,13 +140,22 @@ class VirtualRobot final {
   [[nodiscard]] sdk::RobotState poll(core::Timestamp now) {
     sdk::RobotState s;
     s.timestamp = now;
-    s.servo_state = servo_on_ ? machine::ServoState::On : machine::ServoState::Off;
     s.program_state = state_;
 
     const std::int64_t now_ns = now.nanoseconds();
+
+    // A latched hard fault (E-stop / servo) holds the robot at the pose it stopped
+    // in and reports the alarm on every frame until the operator clears it.
+    if (faulted_) {
+      s.joint_positions = plan_.trajectory.empty() ? home_pose() : plan_.trajectory.sample(frozen_t_);
+      finish_frame(s, command_of(frozen_t_), 0.0);
+      apply_fault_fields(s);
+      return s;
+    }
     if (!running_) {
       s.joint_positions = home_pose();
       finish_frame(s, 0, 0.0);
+      apply_fault_fields(s);
       return s;
     }
     if (!started_clock_) { start_ns_ = now_ns; last_ns_ = now_ns; started_clock_ = true; }
@@ -136,6 +164,7 @@ class VirtualRobot final {
       last_ns_ = now_ns;
       s.joint_positions = plan_.trajectory.sample(frozen_t_);
       finish_frame(s, command_of(frozen_t_), 0.0);
+      apply_fault_fields(s);
       return s;
     }
     last_ns_ = now_ns;
@@ -161,10 +190,20 @@ class VirtualRobot final {
       const int seg = plan_.trajectory.segment_at(t);
       cmd = command_of(t);
       moving = plan_.trajectory.segment_is_motion(seg) ? 1.0 : 0.0;
+
+      // Evaluate the fault scenario against this tick. A hard fault aborts the run
+      // here; a soft fault (arc loss) latches but the motion continues.
+      const double dt = std::max(0.0, t - prev_elapsed_);
+      for (const fault::FaultTrip& trip : faults_.poll(t, dt, cmd, prev_fault_step_)) {
+        apply_trip(trip, s, now);
+      }
+      prev_elapsed_ = t;
+      prev_fault_step_ = cmd;
+      if (faulted_) moving = 0.0;  // aborted this tick: hold, do not report motion
     }
 
     // Step-boundary events fire per command / program line, not per sub-segment.
-    if (cmd != last_step_ && state_ != machine::ProgramState::Completed) {
+    if (cmd != last_step_ && state_ == machine::ProgramState::Running) {
       if (last_step_ >= 0)
         s.events.push_back({now, machine::EventKind::StepCompleted, machine::Severity::Info,
                             "Step done: " + step_label(last_step_)});
@@ -173,6 +212,7 @@ class VirtualRobot final {
       last_step_ = cmd;
     }
     finish_frame(s, cmd, moving);
+    apply_fault_fields(s);
     return s;
   }
 
@@ -184,6 +224,16 @@ class VirtualRobot final {
     last_step_ = -1;
     completed_emitted_ = false;
     frozen_t_ = 0.0;
+    // Re-arm the fault scenario and clear any latched fault from a previous run, so
+    // each start replays the same deterministic sequence.
+    faulted_ = false;
+    arc_fault_ = false;
+    fault_severity_ = machine::Severity::Info;
+    fault_code_ = 0;
+    fault_message_.clear();
+    prev_elapsed_ = 0.0;
+    prev_fault_step_ = -1;
+    faults_.arm();
     state_ = machine::ProgramState::Running;
   }
 
@@ -210,17 +260,77 @@ class VirtualRobot final {
     return c.label.empty() ? machine::to_string(c.kind) : c.label;
   }
 
+  // Latch a fault raised this tick and mutate the frame to reflect it. A hard fault
+  // (E-stop / servo) aborts the run; a soft fault (arc loss) only flags the process.
+  void apply_trip(const fault::FaultTrip& trip, sdk::RobotState& s, core::Timestamp now) {
+    switch (trip.kind) {
+      case fault::FaultKind::EmergencyStop:
+        faulted_ = true;
+        running_ = false;
+        paused_ = false;
+        state_ = machine::ProgramState::Aborted;
+        fault_severity_ = machine::Severity::Critical;
+        fault_code_ = 911;
+        fault_message_ = trip.message;
+        s.events.push_back({now, machine::EventKind::EmergencyStop, machine::Severity::Critical, trip.message});
+        break;
+      case fault::FaultKind::ServoFault:
+        faulted_ = true;
+        running_ = false;
+        paused_ = false;
+        state_ = machine::ProgramState::Aborted;
+        fault_severity_ = machine::Severity::Error;
+        fault_code_ = 500;
+        fault_message_ = trip.message;
+        s.events.push_back({now, machine::EventKind::Error, machine::Severity::Error, trip.message});
+        break;
+      case fault::FaultKind::ArcLoss:
+        arc_fault_ = true;
+        s.events.push_back({now, machine::EventKind::Warning, machine::Severity::Warning, trip.message});
+        break;
+      case fault::FaultKind::EncoderNoise:
+      case fault::FaultKind::CalibrationDrift:
+        break;  // continuous effects, applied in finish_frame
+    }
+  }
+
+  // Stamp the latched fault (if any) onto the outgoing frame, and set servo power.
+  // Called on every return path so the alarm persists until it is cleared.
+  void apply_fault_fields(sdk::RobotState& s) const {
+    if (faulted_) {
+      s.servo_state = machine::ServoState::Error;
+      s.program_state = machine::ProgramState::Aborted;
+      s.error_severity = fault_severity_;
+      s.error_code = fault_code_;
+      s.error_message = fault_message_;
+    } else {
+      s.servo_state = servo_on_ ? machine::ServoState::On : machine::ServoState::Off;
+    }
+  }
+
   void finish_frame(sdk::RobotState& s, int cmd, double moving) const {
     s.current_step = cmd;
     s.current_step_label = step_label(cmd);
     s.speed_fraction = moving;
 
-    const auto fk = machine::forward_kinematics(profile_.axes, s.joint_positions, tools_.current_offset());
+    // Encoder noise perturbs the *reported* joints (the true trajectory is unchanged);
+    // Cartesian telemetry is derived from the noisy joints so the frame stays coherent.
+    faults_.perturb_joints(s.joint_positions);
+
+    // Calibration drift slowly shifts the TCP the controller believes it has.
+    core::Pose3D tool = tools_.current_offset();
+    const core::Vec3 drift = faults_.tcp_drift(frozen_t_);
+    tool.position_m.x_m += drift.x_m;
+    tool.position_m.y_m += drift.y_m;
+    tool.position_m.z_m += drift.z_m;
+
+    const auto fk = machine::forward_kinematics(profile_.axes, s.joint_positions, tool);
     s.tcp_pose = fk.tcp;
 
     // The weld process drives its own signals while welding; other channels (and
-    // every channel on a non-welding robot) hold whatever was last written.
-    const bool weld = running_ && weld_at(frozen_t_);
+    // every channel on a non-welding robot) hold whatever was last written. A lost
+    // arc (arc_fault_) forces the weld signals down even mid-seam.
+    const bool weld = running_ && !arc_fault_ && weld_at(frozen_t_);
     if (io_.count("weld_on")) {
       io_["weld_on"] = weld ? 1.0 : 0.0;
       io_["gas_on"] = weld ? 1.0 : 0.0;
@@ -249,6 +359,9 @@ class VirtualRobot final {
 
   mutable std::vector<double> last_joints_;
   mutable std::map<std::string, double> io_;
+  // mutable: continuous effects (encoder noise) advance the RNG from const finish_frame,
+  // like io_ and last_joints_ which the same frame also updates.
+  mutable fault::FaultInjector faults_;
 
   bool servo_on_{false};
   bool running_{false};
@@ -259,6 +372,16 @@ class VirtualRobot final {
   std::int64_t start_ns_{0};
   std::int64_t last_ns_{0};
   double frozen_t_{0.0};
+
+  // Fault state: a latched hard fault (E-stop / servo) plus a soft arc-loss flag,
+  // and the per-tick tracking the injector's triggers need.
+  bool faulted_{false};
+  bool arc_fault_{false};
+  machine::Severity fault_severity_{machine::Severity::Info};
+  int fault_code_{0};
+  std::string fault_message_;
+  double prev_elapsed_{0.0};
+  int prev_fault_step_{-1};
 };
 
 }  // namespace cavr::sim

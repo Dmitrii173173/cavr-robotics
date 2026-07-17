@@ -905,6 +905,74 @@ void RobotController::setMotionProfile(int mode) {
   emit programChanged();  // refresh the cycle-time read-out
 }
 
+namespace {
+// The in-process virtual robot behind the mock adapter, or nullptr for a remote
+// controller (which runs its own faults, out of the twin's reach).
+cavr::sim::VirtualRobot* mock_robot(cavr::adapter_sdk::ControllerAdapter* c) {
+  auto* mock = dynamic_cast<cavr::adapters::mock_robot::MockController*>(c);
+  return mock ? &mock->virtual_robot() : nullptr;
+}
+}  // namespace
+
+bool RobotController::faultSupported() const { return mock_robot(controller_.get()) != nullptr; }
+
+void RobotController::injectEstop() {
+  auto* robot = mock_robot(controller_.get());
+  if (!robot) { emit eventLogged("fault | E-stop not supported on this controller"); return; }
+  robot->faults().add(cavr::fault_injection::estop_at(0.0, "Operator emergency stop"));
+  emit eventLogged("fault | E-stop injected — program will abort");
+}
+
+void RobotController::injectServoFault() {
+  auto* robot = mock_robot(controller_.get());
+  if (!robot) { emit eventLogged("fault | servo fault not supported on this controller"); return; }
+  cavr::fault_injection::FaultSpec s;
+  s.kind = cavr::fault_injection::FaultKind::ServoFault;
+  s.trigger = cavr::fault_injection::TriggerKind::AtTime;
+  s.at_time_s = 0.0;
+  s.label = "Servo overload";
+  robot->faults().add(s);
+  emit eventLogged("fault | servo overload injected — program will abort");
+}
+
+void RobotController::injectArcLoss() {
+  auto* robot = mock_robot(controller_.get());
+  if (!robot) { emit eventLogged("fault | arc loss not supported on this controller"); return; }
+  robot->faults().add(cavr::fault_injection::arc_loss_at(0.0, "Weld arc lost"));
+  emit eventLogged("fault | arc loss injected — weld signals will drop");
+}
+
+void RobotController::setEncoderNoise(double stddev_deg) {
+  auto* robot = mock_robot(controller_.get());
+  encoder_noise_rad_ = std::max(0.0, stddev_deg) * 3.14159265358979323846 / 180.0;
+  if (!robot) { emit eventLogged("fault | encoder noise not supported on this controller"); return; }
+  // Rebuild the continuous specs. Discrete faults are one-shot and fire within a
+  // tick, so re-arming the injector here does not lose a pending alarm in practice.
+  robot->faults().clear();
+  if (encoder_noise_rad_ > 0.0) robot->faults().add(cavr::fault_injection::encoder_noise(encoder_noise_rad_));
+  robot->faults().arm();
+  emit eventLogged(QString("fault | encoder noise → %1° std-dev").arg(stddev_deg, 0, 'f', 2));
+}
+
+void RobotController::resetFault() {
+  auto* robot = mock_robot(controller_.get());
+  if (!robot) { emit eventLogged("fault | nothing to reset on this controller"); return; }
+  robot->clear_fault();
+  emit eventLogged("fault | cleared — alarm acknowledged");
+  publish();
+}
+
+QString RobotController::faultStatus() const {
+  const auto& frame = active_frame();
+  if (frame.faulted()) {
+    return QString("⛔ %1 (code %2)")
+        .arg(QString::fromStdString(frame.error_message.empty() ? "Faulted" : frame.error_message))
+        .arg(frame.error_code);
+  }
+  if (frame.servo_state == cavr::machine::ServoState::Error) return "⛔ servo error";
+  return "✓ no active fault";
+}
+
 bool RobotController::hasScan() const { return manager_.has_point_cloud(); }
 
 int RobotController::scanPointCount() const {
