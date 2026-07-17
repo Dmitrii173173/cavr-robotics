@@ -111,6 +111,18 @@ target_link_libraries(cavr_sim_virtual_robot_test
 
 add_test(NAME cavr_sim_virtual_robot_test COMMAND cavr_sim_virtual_robot_test)
 
+add_executable(cavr_fault_injection_test
+  fault_injection_test.cpp
+)
+
+target_link_libraries(cavr_fault_injection_test
+  PRIVATE
+    CAVR::fault_injection
+    CAVR::core
+)
+
+add_test(NAME cavr_fault_injection_test COMMAND cavr_fault_injection_test)
+
 add_executable(cavr_calibration_test
   calibration_test.cpp
 )

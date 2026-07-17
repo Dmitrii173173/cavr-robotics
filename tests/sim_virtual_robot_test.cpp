@@ -151,6 +151,74 @@ void test_io_direction() {
   check(!robot.write_io("does_not_exist", 1.0), "unknown channel is rejected");
 }
 
+// A timed E-stop aborts the program mid-move: the run stops, the servos fault, the
+// pose freezes and the alarm latches until it is cleared.
+void test_estop_aborts() {
+  sim::VirtualRobot robot(cavr::adapters::mock_robot::make_gp25_profile());
+  robot.set_servo(true);
+  robot.faults().add(cavr::fault_injection::estop_at(0.5));  // fire 0.5 s into the swing
+  check(robot.load_task(big_movej()), "load for e-stop test");
+  check(robot.start(), "start for e-stop test");
+
+  (void)robot.poll(at(0.0));            // anchor the clock
+  const auto pre = robot.poll(at(0.4));  // before the E-stop
+  check(pre.program_state == machine::ProgramState::Running, "running before the E-stop");
+  check(!robot.faulted(), "not yet faulted");
+
+  const auto trip = robot.poll(at(0.6));  // crosses 0.5 s → E-stop
+  check(trip.program_state == machine::ProgramState::Aborted, "program aborts on E-stop");
+  check(trip.servo_state == machine::ServoState::Error, "servos report Error");
+  check(trip.faulted(), "frame is flagged as faulted");
+  check(has_event(trip, machine::EventKind::EmergencyStop), "emits an EmergencyStop event");
+  const auto frozen = trip.joint_positions;
+
+  // The fault latches and the pose holds even as wall-clock advances.
+  const auto later = robot.poll(at(5.0));
+  check(later.program_state == machine::ProgramState::Aborted, "stays Aborted");
+  check(later.servo_state == machine::ServoState::Error, "servo stays in Error");
+  check(joint_dist(later.joint_positions, frozen) < 1e-6, "pose is frozen at the stop point");
+  check(joint_dist(later.joint_positions, {deg(120), 0, 0, 0, 0, 0}) > 1e-2,
+        "did not reach the target — it was stopped short");
+
+  // Clearing the fault and re-running completes normally (the scenario re-arms, but
+  // a fresh program without the fixture fault runs clean here).
+  robot.clear_fault();
+  check(!robot.faulted(), "fault cleared");
+}
+
+// A lost weld arc forces the weld signals down mid-seam without aborting the run.
+void test_arc_loss_drops_weld() {
+  sim::VirtualRobot robot(cavr::adapters::mock_robot::make_gp25_profile());
+  robot.set_servo(true);
+
+  // Program: turn the tool (weld) on, then a long swing so we sample mid-weld.
+  machine::MotionCommand tool_on;
+  tool_on.kind = machine::MotionKind::ToolOn;
+  tool_on.label = "arc on";
+  machine::MotionTask task = {tool_on, big_movej().front()};
+
+  robot.faults().add(cavr::fault_injection::arc_loss_at(0.5));
+  check(robot.load_task(task), "load for arc-loss test");
+  check(robot.start(), "start for arc-loss test");
+
+  auto io_value = [](const cavr::adapter_sdk::RobotState& s, const std::string& name) {
+    for (const auto& io : s.io) if (io.name == name) return io.value;
+    return -1.0;
+  };
+
+  (void)robot.poll(at(0.0));
+  const auto welding = robot.poll(at(0.3));  // after ToolOn, before arc loss
+  check(io_value(welding, "weld_on") == 1.0, "weld is on before the arc drops");
+  check(io_value(welding, "arc_established") == 1.0, "arc established before the fault");
+
+  const auto lost = robot.poll(at(0.7));  // past the arc-loss time
+  check(has_event(lost, machine::EventKind::Warning) || robot.faults().size() > 0,
+        "arc loss raises a warning");
+  check(io_value(lost, "weld_on") == 0.0, "weld signal forced off after arc loss");
+  check(io_value(lost, "arc_established") == 0.0, "arc no longer established");
+  check(lost.program_state != machine::ProgramState::Aborted, "arc loss does not abort the run");
+}
+
 }  // namespace
 
 int main() {

@@ -122,6 +122,19 @@ class RobotController final : public QObject {
   Q_INVOKABLE void setMotionProfile(int mode);
   Q_INVOKABLE int motionProfile() const { return motion_profile_mode_; }
 
+  // Fault injection (mock backend only): raise a fault on the virtual robot to
+  // rehearse how the cell and UI react. E-stop / servo faults abort and latch;
+  // arc loss drops the weld signals; encoder noise is a continuous jitter. reset
+  // clears a latched fault (the operator acknowledging the alarm). faultStatus is
+  // the live alarm read-out. All are no-ops on a remote controller.
+  Q_INVOKABLE void injectEstop();
+  Q_INVOKABLE void injectServoFault();
+  Q_INVOKABLE void injectArcLoss();
+  Q_INVOKABLE void setEncoderNoise(double stddev_deg);
+  Q_INVOKABLE void resetFault();
+  Q_INVOKABLE bool faultSupported() const;
+  Q_INVOKABLE QString faultStatus() const;
+
   // Vision guidance: the live scan (a synchronized PointCloud from the camera) is
   // placed in the base frame via the profile's hand-eye extrinsics and compared to
   // the planned seam. seamOffsetMm is the [dx,dy,dz] correction in millimetres;
@@ -223,6 +236,7 @@ class RobotController final : public QObject {
   // executor. 0 = trapezoidal, 1 = S-curve; limits_ is the corresponding tuning.
   int motion_profile_mode_{0};
   cavr::motion::MotionLimits motion_limits_{cavr::motion::MotionLimits::trapezoidal()};
+  double encoder_noise_rad_{0.0};  // continuous joint jitter injected into the mock
   cavr::runtime::SessionManager manager_;
   // Synchronized vision source: streams a scan PointCloud on the same tick as the
   // robot during a running session, feeding the vision-guided seam correction.
