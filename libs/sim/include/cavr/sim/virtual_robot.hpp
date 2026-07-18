@@ -8,8 +8,8 @@
 // It has no Qt, no sockets and no notion of "connection": that belongs to the
 // adapter on top (MockController for Studio, and the same backend inside
 // cavr-robotd). Extracting it means motion can be driven and inspected in a test
-// without an adapter, and the realism knobs (velocity profile now; collisions,
-// dynamics, faults later) have one home instead of bloating the mock.
+// without an adapter, and the realism knobs (velocity profile and faults now;
+// dynamics later) have one home instead of bloating the mock.
 //
 // The trajectory itself is built by libs/motion::plan_task — the same planner the
 // validator uses — so what is checked and what runs are one code path.
