@@ -382,11 +382,6 @@ QWidget* StudioWindow::make_program_panel() {
   validation_label_->setObjectName("validationSummary");
   layout->addWidget(validation_label_);
 
-  // Collision status (self-collision + floor over the sampled trajectory).
-  collision_label_ = new QLabel;
-  collision_label_->setObjectName("collisionSummary");
-  layout->addWidget(collision_label_);
-
   // Velocity profile + estimated cycle time. The profile shapes accel/decel (and
   // corner blending) for both the estimate and the mock's executor; the cycle time
   // comes from the same libs/motion planner that runs the move, so it is honest.
@@ -533,12 +528,6 @@ void StudioWindow::refresh_program() {
     validation_label_->setText(controller_->validationSummary());
     const bool ok = controller_->programValid();
     validation_label_->setStyleSheet(ok ? "color:#46f0a0;" : "color:#ff6b6b; font-weight:bold;");
-  }
-  if (collision_label_) {
-    const QString summary = controller_->collisionSummary();
-    collision_label_->setText("Collisions: " + summary);
-    const bool clean = summary.contains("no collision") || summary.contains("no steps");
-    collision_label_->setStyleSheet(clean ? "color:#46f0a0;" : "color:#ff6b6b; font-weight:bold;");
   }
   if (cycle_label_) {
     cycle_label_->setText("Cycle: " + controller_->cycleSummary());

@@ -10,11 +10,9 @@
 #include <cavr/machine/motion.hpp>
 #include <cavr/motion/limits.hpp>
 #include <cavr/motion/plan_task.hpp>
-#include <cavr/validation/collision.hpp>
 
 #include <algorithm>
 #include <cmath>
-#include <map>
 #include <string>
 #include <vector>
 
@@ -108,59 +106,6 @@ struct ValidationReport final {
   if (!plan.reachable) {
     report.issues.push_back({machine::Severity::Error, "Cartesian target is unreachable (IK did not converge)",
                              plan.unreachable_command});
-  }
-
-  return report;
-}
-
-// Same validation, plus collision checking against a CollisionModel (self, floor,
-// sphere obstacles). The planned trajectory — from the same planner the controller
-// runs — is sampled and every configuration is checked, so the report covers the
-// whole motion, not just the endpoints. Sets collisions_evaluated = true.
-[[nodiscard]] inline ValidationReport validate_task(const machine::MachineProfile& profile,
-                                                    const machine::MotionTask& task,
-                                                    const CollisionModel& model) {
-  ValidationReport report = validate_task(profile, task);
-  report.collisions_evaluated = true;
-
-  const std::size_t dof = profile.dof();
-  core::Pose3D tool{};
-  if (const machine::CoordinateFrame* tcp = profile.frame("tcp")) tool = tcp->transform;
-  const cavr::motion::TaskPlan plan = cavr::motion::plan_task(
-      profile.axes, tool, task, std::vector<double>(dof, 0.0), cavr::motion::MotionLimits::trapezoidal());
-
-  // Worst penetration per colliding pair, and the program step where it peaked, so
-  // one grazing pair yields one issue rather than hundreds of samples.
-  std::map<std::string, CollisionHit> worst;
-  std::map<std::string, int> worst_step;
-  auto record = [&](const std::vector<double>& q, int step) {
-    for (const CollisionHit& hit : check_configuration(profile.axes, q, tool, model)) {
-      const std::string key = hit.a + " | " + hit.b;
-      const auto it = worst.find(key);
-      if (it == worst.end() || hit.penetration_m > it->second.penetration_m) {
-        worst[key] = hit;
-        worst_step[key] = step;
-      }
-    }
-  };
-
-  if (plan.trajectory.empty()) {
-    record(std::vector<double>(dof, 0.0), -1);  // no motion: at least check the home pose
-  } else {
-    const double total = plan.trajectory.duration();
-    constexpr int kSteps = 200;
-    for (int i = 0; i <= kSteps; ++i) {
-      const double t = total * i / kSteps;
-      record(plan.trajectory.sample(t), plan.trajectory.command_at(t));
-    }
-  }
-
-  for (const auto& [key, hit] : worst) {
-    const int mm = static_cast<int>(std::lround(hit.penetration_m * 1000.0));
-    report.issues.push_back({machine::Severity::Error,
-                             "Collision: " + hit.a + " vs " + hit.b + " (penetration ~" +
-                                 std::to_string(mm) + " mm)",
-                             worst_step[key]});
   }
 
   return report;

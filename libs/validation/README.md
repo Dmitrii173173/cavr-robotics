@@ -11,18 +11,9 @@ Dependency-free.
   controller runs** — reachability (a Cartesian target whose IK leaves the
   workspace is a hard error) and cycle time. So "what was validated" and "what
   will run" are one code path.
-- **`collision.hpp`** — the collision model. The robot is approximated as a chain
-  of **link capsules** (a segment between consecutive joint origins, swept by a
-  radius, plus the tool stub). `check_configuration(axes, q, tool, model)` checks
-  one joint configuration for:
-  - **self-collision** — non-adjacent link capsules against each other,
-  - **floor** — a plane on a chosen up-axis (the GP25 asset is Y-up), with optional
-    clearance,
-  - **sphere obstacles** — fixtures/posts as bounding spheres.
 
-  All distances are exact (segment/segment, segment/plane, segment/point); boxes
-  and meshes are intentionally not modelled yet rather than approximated.
-
-The `validate_task(profile, task, CollisionModel)` overload runs the base checks,
-then **samples the planned trajectory** and checks every configuration, reporting
-the worst penetration per colliding pair and setting `collisions_evaluated = true`.
+Full collision and singularity analysis is intentionally out of scope: the report
+carries a `collisions_evaluated` flag that stays `false`, so downstream consumers
+know these were not checked rather than assuming a silent pass. The robot's own
+constraints — joint range, speed and reachability — are what the validator
+enforces.

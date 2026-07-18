@@ -10,7 +10,7 @@ This is where robot behaviour lives, separately from "how the app talks to the
 controller". `adapters/mock_robot`'s `MockController` is a thin `ControllerAdapter`
 over a `VirtualRobot`; the same backend runs inside `cavr-robotd`. Because it is
 adapter-free, motion can be driven and asserted in a unit test without sockets, and
-future realism (collisions, dynamics, fault models) has a home here instead of
+future realism (dynamics, fault models) has a home here instead of
 bloating the mock.
 
 The trajectory it executes is built by `motion::plan_task` — the same planner the

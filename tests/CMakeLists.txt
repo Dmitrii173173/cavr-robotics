@@ -160,21 +160,6 @@ target_link_libraries(cavr_runtime_vision_guidance_test
 
 add_test(NAME cavr_runtime_vision_guidance_test COMMAND cavr_runtime_vision_guidance_test)
 
-add_executable(cavr_validation_collision_test
-  validation_collision_test.cpp
-)
-
-target_link_libraries(cavr_validation_collision_test
-  PRIVATE
-    CAVR::validation
-    CAVR::adapter_mock_robot
-    CAVR::machine
-    CAVR::motion
-    CAVR::core
-)
-
-add_test(NAME cavr_validation_collision_test COMMAND cavr_validation_collision_test)
-
 add_executable(cavr_machine_frames_test
   machine_frames_test.cpp
 )

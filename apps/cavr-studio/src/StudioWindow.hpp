@@ -41,7 +41,6 @@ class StudioWindow final : public QMainWindow {
   QListWidget* saved_programs_list_{nullptr};  // saved jobs in the DB
   QLineEdit* program_name_{nullptr};      // name field for saving a job
   QLabel* validation_label_{nullptr};     // pre-flight validation summary
-  QLabel* collision_label_{nullptr};      // collision status (self + floor)
   QLabel* cycle_label_{nullptr};          // estimated cycle time under the chosen profile
   QComboBox* motion_profile_{nullptr};    // trapezoidal / S-curve velocity profile
   QLabel* fault_status_label_{nullptr};   // live fault / alarm read-out

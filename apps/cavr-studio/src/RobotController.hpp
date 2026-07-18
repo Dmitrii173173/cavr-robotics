@@ -109,9 +109,6 @@ class RobotController final : public QObject {
   // limits, reachability (IK), frames. Summary string + overall ok flag.
   Q_INVOKABLE QString validationSummary() const;
   Q_INVOKABLE bool programValid() const;
-  // Collision status of the current program against the active robot: self-collision
-  // and floor penetration over the sampled trajectory (see libs/validation).
-  Q_INVOKABLE QString collisionSummary() const;
   // Estimated cycle time of the current program, from the SAME libs/motion planner
   // the controller executes — so the number shown is the time that will actually run,
   // under the currently selected velocity profile. "~2.34 s (trapezoidal)".

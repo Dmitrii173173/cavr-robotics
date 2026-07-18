@@ -597,27 +597,13 @@ QString step_detail(const cavr::machine::MotionCommand& c) {
 // Pre-flight report: the library checks (limits/frames/target) plus a reachability
 // pass that IK-solves each Cartesian target along the chain (mirroring how the
 // controller executes it), so unreachable MoveL/MoveC poses are caught before Run.
-// A conservative default collision model for a profile: link capsules against
-// themselves and the floor. The GP25 asset is Y-up, so the floor is the y-plane.
-// No obstacle spheres by default, so a valid demo program stays clean.
-cavr::validation::CollisionModel default_collision_model(const cavr::machine::MachineProfile&) {
-  cavr::validation::CollisionModel model;
-  model.link_radius_m = 0.05;
-  model.check_self = true;
-  model.check_floor = true;
-  model.floor_up_axis = 1;  // Y-up
-  model.floor_level_m = 0.0;
-  return model;
-}
-
 cavr::validation::ValidationReport full_report(const cavr::machine::MachineProfile& profile,
                                                const cavr::machine::MotionTask& task,
                                                const cavr::core::Pose3D& tool) {
   using namespace cavr::machine;
-  // The collision overload runs the base checks (limits/frames/reachability/cycle
-  // time) and then samples the planned trajectory for self/floor collisions.
-  cavr::validation::ValidationReport report =
-      cavr::validation::validate_task(profile, task, default_collision_model(profile));
+  // The base checks: axis limits, commanded speed, referenced frames, reachability
+  // and the cycle-time estimate, all from the same planner the controller runs.
+  cavr::validation::ValidationReport report = cavr::validation::validate_task(profile, task);
 
   std::vector<double> seed(profile.dof(), 0.0);
   for (std::size_t s = 0; s < task.size(); ++s) {
@@ -859,19 +845,6 @@ bool RobotController::programValid() const {
   const cavr::core::Pose3D tool =
       controller_ && controller_->tools() ? controller_->tools()->current_offset() : cavr::core::Pose3D{};
   return full_report(manager_.profile(), program_.task(), tool).ok();
-}
-
-QString RobotController::collisionSummary() const {
-  const cavr::machine::MotionTask& task = program_.task();
-  if (task.empty()) return "no steps";
-  const cavr::core::Pose3D tool =
-      controller_ && controller_->tools() ? controller_->tools()->current_offset() : cavr::core::Pose3D{};
-  const auto report = full_report(manager_.profile(), task, tool);
-  int collisions = 0;
-  for (const auto& i : report.issues)
-    if (i.message.rfind("Collision:", 0) == 0) ++collisions;
-  if (collisions == 0) return "✓ no collisions (self + floor checked)";
-  return QString("✗ %1 collision%2").arg(collisions).arg(collisions == 1 ? "" : "s");
 }
 
 QString RobotController::cycleSummary() const {
